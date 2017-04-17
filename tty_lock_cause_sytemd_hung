@@ -1,0 +1,126 @@
+问题：systemd进入D状态，系统无法登录操作。
+[  843.111758] INFO: task systemd:1 blocked for more than 120 seconds.
+[  843.113575] "echo 0 > /proc/sys/kernel/hung_task_timeout_secs" disables this message.
+[  843.115328] systemd         D ffff883f2b402670     0     1      0 0x00000000
+[  843.117075]  ffff881fd3573c30 0000000000000082 ffff883f915f0000 ffff881fd3573fd8
+[  843.118824]  ffff881fd3573fd8 ffff881fd3573fd8 ffff883f915f0000 ffff883f915f0000
+[  843.120576]  7fffffffffffffff ffff883f2b402678 0000000000000001 ffff883f2b402670
+[  843.122318] Call Trace:
+[  843.123941]  [<ffffffff8163c1d9>] schedule+0x29/0x70
+[  843.125548]  [<ffffffff81639ec9>] schedule_timeout+0x209/0x2d0
+[  843.127185]  [<ffffffff810c8b04>] ? check_preempt_curr_rt+0x64/0xd0
+[  843.128775]  [<ffffffff8101cd45>] ? native_sched_clock+0x35/0x80
+[  843.130400]  [<ffffffff8101cd99>] ? sched_clock+0x9/0x10
+[  843.132007]  [<ffffffff810bbeb5>] ? sched_clock_cpu+0x85/0xc0
+[  843.133506]  [<ffffffff810b9236>] ? try_to_wake_up+0x1b6/0x300
+[  843.134983]  [<ffffffff8163df7a>] ldsem_down_write+0xea/0x255
+[  843.136500]  [<ffffffff810b93f2>] ? default_wake_function+0x12/0x20
+[  843.138010]  [<ffffffff8163e638>] tty_ldisc_lock_pair_timeout+0x88/0x120
+[  843.139503]  [<ffffffff813b75dc>] tty_ldisc_hangup+0xcc/0x230
+[  843.140979]  [<ffffffff813aed84>] __tty_hangup+0x344/0x490
+[  843.142444]  [<ffffffff813b1645>] tty_ioctl+0x885/0xbc0
+[  843.143820]  [<ffffffff811f0bcb>] ? do_filp_open+0x4b/0xb0
+[  843.145159]  [<ffffffff811f2c85>] do_vfs_ioctl+0x2e5/0x4c0
+[  843.146493]  [<ffffffff8128cd7e>] ? file_has_perm+0xae/0xc0
+[  843.147822]  [<ffffffff811f2f01>] SyS_ioctl+0xa1/0xc0
+[  843.149143]  [<ffffffff81647249>] system_call_fastpath+0x16/0x1b
+[  843.150609] INFO: task ConsoleOutTask:30833 blocked for more than 12
+
+分析：
+用sysrq搜集一个vmcore，分析tty锁相关的数据结构和代码流程。
+
+crash> bt 1
+PID: 1      TASK: ffff883f915f0000  CPU: 23  COMMAND: "systemd"
+ #0 [ffff881fd3573bd0] __schedule at ffffffff8163bb3d
+ #1 [ffff881fd3573c38] schedule at ffffffff8163c1d9
+ #2 [ffff881fd3573c48] schedule_timeout at ffffffff81639ec9
+ #3 [ffff881fd3573cf8] ldsem_down_write at ffffffff8163df7a
+ #4 [ffff881fd3573d68] tty_ldisc_lock_pair_timeout at ffffffff8163e638
+ #5 [ffff881fd3573d98] tty_ldisc_hangup at ffffffff813b75dc
+ #6 [ffff881fd3573dc0] __tty_hangup at ffffffff813aed84
+ #7 [ffff881fd3573e10] tty_ioctl at ffffffff813b1645
+ #8 [ffff881fd3573eb8] do_vfs_ioctl at ffffffff811f2c85
+ #9 [ffff881fd3573f30] sys_ioctl at ffffffff811f2f01
+#10 [ffff881fd3573f80] system_call_fastpath at ffffffff81647249
+
+crash> files 1
+PID: 1      TASK: ffff883f915f0000  CPU: 23  COMMAND: "systemd"
+ROOT: /    CWD: /
+ FD       FILE            DENTRY           INODE       TYPE PATH
+ ......
+ 14 ffff881fae46ec00 ffff883f91008f00 ffff883f908db578 CHR  /dev/tty3
+
+从fd解析出tty结构体：
+crash> struct  file.private_data  ffff881fae46ec00
+  private_data = 0xffff881e5b0b9f80
+crash> struct tty_file_private.tty  0xffff881e5b0b9f80
+  tty = 0xffff883f2b402400
+  
+  
+vmcore搜索持有这个tty结构体的其他进程，发现30855进程持有它的锁：
+crash> bt  30855
+PID: 30855  TASK: ffff881fcfca8000  CPU: 9   COMMAND: "XXXXX"
+ #0 [ffff881e6064bca0] __schedule at ffffffff8163bb3d
+ #1 [ffff881e6064bd08] schedule at ffffffff8163c1d9
+ #2 [ffff881e6064bd18] schedule_timeout at ffffffff81639ec9
+ #3 [ffff881e6064bdc0] n_tty_read at ffffffff813b381c
+ #4 [ffff881e6064bec0] tty_read at ffffffff813aefed
+ #5 [ffff881e6064bf08] vfs_read at ffffffff811df1cc
+ #6 [ffff881e6064bf38] sys_read at ffffffff811dfd1f
+ 
+ 分析tty_read 代码，如果调用到的下层n_tty_read 不返回，是不会释放ldisc_sem的：
+static ssize_t tty_read(struct file *file, char __user *buf, size_t count,
+			loff_t *ppos)
+{
+......
+	ld = tty_ldisc_ref_wait(tty);   ---＞这个地方会获取tty-＞ldisc_sem锁。
+	if (ld-＞ops-＞read)
+		i = (ld-＞ops-＞read)(tty, file, buf, count);  ----》这个地方调用到n_tty_read， 只要n_tty_read 不返回，上面的锁不会释放。
+	else
+		i = -EIO;
+	tty_ldisc_deref(ld);   --》这里才释放锁
+}
+
+n_tty_read 函数，对于非堵塞方式可以返回：
+static ssize_t n_tty_read(struct tty_struct *tty, struct file *file,
+			 unsigned char __user *buf, size_t nr)
+{
+......
+
+		if (!input_available_p(tty, 0)) {
+			if (test_bit(TTY_OTHER_CLOSED, &tty-＞flags)) {
+				retval = -EIO;
+				break;
+			}
+			if (tty_hung_up_p(file))
+				break;
+			if (!timeout)
+				break;
+			if (file-＞f_flags & O_NONBLOCK) {   ---》设置了nonblock才会跳出去返回。
+				retval = -EAGAIN;
+				break;
+			}
+......
+
+vmcore中可以解析出不是 O_NONBLOCK。
+对于堵塞方式，超时时间过了才会返回。
+超时时间，默认是	timeout = MAX_SCHEDULE_TIMEOUT;
+上层程序也可以自定义超时时间，但是当tty是noncanonical mode 才会有效：
+	if (!ldata->icanon) {
+		time = (HZ / 10) * TIME_CHAR(tty);
+  
+VTIME  Timeout in deciseconds for noncanonical read (TIME).
+The  setting of the ICANON canon flag in c_lflag determines whether the terminal is operating in canonical mode (ICANON set) or noncanonical mode (ICANON unset).  By
+       default, ICANON set.
+
+crash> struct tty_file_private.tty  0xffff881e5b0b9f80
+  tty = 0xffff883f2b402400
+crash> struct tty_struct.disc_data  0xffff883f2b402400
+  disc_data = 0xffff883dd652bc00
+crash> struct n_tty_data.icanon  0xffff883dd652bc00
+  icanon = 1 '\001'
+  
+  所以问题在于，上层以canonical模式打开tty，以堵塞的方式read，导致获取ldisc_sem之后，一直没有返回，其他程序获取不到ldisc_sem，长时间处于D状态。
+  
+
+
