@@ -13,9 +13,9 @@ COMMAND     PID USER  FD   TYPE DEVICE   SIZE/OFF       NODE NAME
 ovdk-ovsd 16819 root mem-R  REG   0,37 4294967296 2659996728 /dev/dvs_hugepages/rtemap_0
 ovdk-ovsv 16862 root mem    REG   0,37 4294967296 2659996728 /dev/dvs_hugepages/rtemap_0
 
-lsof只能看到有4G巨页被使用，还有的2G找不到被谁占用，怎么找出来呢？
+问题：lsof只能看到有4G巨页被使用，还有的2G找不到被谁占用，怎么找出来呢？
 
-思路：生成vmcore，从vmcore中解析。
+解决思路：生成vmcore，从vmcore中解析。
 
 crash>  hstates
 hstates = $1 = 
@@ -183,4 +183,54 @@ crash> struct task_struct.pid,comm  0xffff880933cd7300
   comm = "java\000)\000\000\060\000\000\000\000\000\000"
 ---》按照数据结构解析，找到它属于java进程。
   
+ 
+ 验证：
+# cat /proc/meminfo  | grep -i huge
+AnonHugePages:    610304 kB
+HugePages_Total:      40
+HugePages_Free:       34
+HugePages_Rsvd:        0
+HugePages_Surp:        0
+Hugepagesize:    1048576 kB
+
+# rm -rf /dev/dvs_hugepages/*
+# cat /proc/meminfo  | grep -i huge
+AnonHugePages:    610304 kB
+HugePages_Total:      40
+HugePages_Free:       38
+HugePages_Rsvd:        0
+HugePages_Surp:        0
+Hugepagesize:    1048576 kB
+
+# ps -ef | grep java
+root     24480 24420  0 13:53 ?        00:00:00 bash -c cd "/home/jenkins" && java  -jar slave.jar
+root     24485 24480  0 13:53 ?        00:00:12 java -jar slave.jar
+# kill -9 24495 24480
+# ps -ef | grep java
+root      7237 19984  0 18:21 pts/4    00:00:00 grep --color=auto java
+# cat /proc/meminfo  | grep -i huge
+AnonHugePages:    514048 kB
+HugePages_Total:      40
+HugePages_Free:       40
+HugePages_Rsvd:        0
+HugePages_Surp:        0
+Hugepagesize:    1048576 kB
+
+---》删除巨页文件、杀掉java进程，占用的巨页都是释放了。
+
+进一步，在另一个环境上，观察java是怎么使用巨页的：
+]# ps -ef | grep java
+root     25293 25223  0 Apr13 ?        00:00:00 bash -c cd "/home/jenkins" && java  -jar slave.jar
+root     25298 25293  0 Apr13 ?        00:01:14 java -jar slave.jar
+
+# cat /proc/25298/maps  | grep -i huge
+480000000-4c0000000 rw-p 00000000 00:0c 2795576                          /anon_hugepage (deleted)
+6c0000000-700000000 rw-p 00000000 00:0c 2795575                          /anon_hugepage (deleted)
+---》可以看到是映射到maps中的。
+
+man mmap中有这个：
+  MAP_HUGETLB (since Linux 2.6.32)
+              Allocate the mapping using "huge pages."  See the Linux kernel source file Documentation/vm/hugetlbpage.txt for further information.
+
+
   
