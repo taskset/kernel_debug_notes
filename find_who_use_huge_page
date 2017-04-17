@@ -1,0 +1,186 @@
+# numastat -m
+
+Per-node system memory usage (in MBs):
+                          Node 0          Node 1           Total
+                 --------------- --------------- ---------------
+HugePages_Total         20480.00        20480.00        40960.00
+HugePages_Free          16384.00        18432.00        34816.00
+HugePages_Surp              0.00            0.00            0.00
+
+# lsof /dev/hugepages/
+# lsof /dev/dvs_hugepages/
+COMMAND     PID USER  FD   TYPE DEVICE   SIZE/OFF       NODE NAME
+ovdk-ovsd 16819 root mem-R  REG   0,37 4294967296 2659996728 /dev/dvs_hugepages/rtemap_0
+ovdk-ovsv 16862 root mem    REG   0,37 4294967296 2659996728 /dev/dvs_hugepages/rtemap_0
+
+lsof只能看到有4G巨页被使用，还有的2G找不到被谁占用，怎么找出来呢？
+
+思路：生成vmcore，从vmcore中解析。
+
+crash>  hstates
+hstates = $1 = 
+ {{
+    next_nid_to_alloc = 0, 
+    next_nid_to_free = 0, 
+    order = 18, 
+    mask = 18446744072635809792, 
+hstates = $1 = 
+ {{
+    next_nid_to_alloc = 0, 
+    next_nid_to_free = 0, 
+    order = 18, 
+    mask = 18446744072635809792, 
+    max_huge_pages = 40, 
+    nr_huge_pages = 40, 
+    free_huge_pages = 34, 
+    resv_huge_pages = 0, 
+    surplus_huge_pages = 0, 
+    nr_overcommit_huge_pages = 0, 
+    hugepage_activelist = {
+      next = 0xffffea0037000020, 
+      prev = 0xffffea0010000020
+    }, 
+    hugepage_freelists = {{
+        next = 0xffffea001c000020, 
+        prev = 0xffffea0011000020
+      }, {
+        next = 0xffffea0036000020, 
+        prev = 0xffffea0025000020
+      }, {
+        next = 0xffffffff81e96518 <hstates+120>, 
+        prev = 0xffffffff81e96518 <hstates+120>
+      }, {
+        next = 0xffffffff81e96528 <hstates+136>, 
+        prev = 0xffffffff81e96528 <hstates+136>
+      }, {
+        next = 0xffffffff81e96538 <hstates+152>, 
+        prev = 0xffffffff81e96538 <hstates+152>
+      }, {
+        next = 0xffffffff81e96548 <hstates+168>, 
+        prev = 0xffffffff81e96548 <hstates+168>
+      }, {
+        next = 0xffffffff81e96558 <hstates+184>, 
+        prev = 0xffffffff81e96558 <hstates+184>
+      }, {
+        next = 0xffffffff81e96568 <hstates+200>, 
+        prev = 0xffffffff81e96568 <hstates+200>
+      }, {
+        next = 0xffffffff81e96578 <hstates+216>, 
+        prev = 0xffffffff81e96578 <hstates+216>
+      }, {
+crash> list 0xffffea0037000020
+ffffea0037000020
+ffffea0038000020
+ffffea000d000020
+ffffea000e000020
+ffffea000f000020
+ffffea0010000020
+ffffffff81e964e8
+
+crash> list -H  0xffffea0037000020     -o 32 -s page.mapping
+ffffea0038000000
+  mapping = 0xffff880285232b81
+ffffea000d000000
+  mapping = 0xffff880e5a26a2a0
+ffffea000e000000
+  mapping = 0xffff880e5a26a2a0
+ffffea000f000000
+  mapping = 0xffff880e5a26a2a0
+ffffea0010000000
+  mapping = 0xffff880e5a26a2a0
+ffffffff81e964c8
+  mapping = 0x0
+  
+  
+  
+crash> tree -t rbtree  -r address_space.i_mmap -o vm_area_struct.shared  -s vm_area_struct.vm_mm  0xffff880e5a26a2a0
+ffff8802851761b0
+  vm_mm = 0xffff880e594e2bc0
+ffff8803142c8288
+  vm_mm = 0xffff88030f5644c0
+crash> tree -t rbtree  -r address_space.i_mmap -o vm_area_struct.shared  -s vm_area_struct.vm_mm  0xffff880e5a26a2a0
+ffff8802851761b0
+  vm_mm = 0xffff880e594e2bc0
+ffff8803142c8288
+  vm_mm = 0xffff88030f5644c0
+crash> tree -t rbtree  -r address_space.i_mmap -o vm_area_struct.shared  -s vm_area_struct.vm_mm  0xffff880e5a26a2a0
+ffff8802851761b0
+  vm_mm = 0xffff880e594e2bc0
+ffff8803142c8288
+  vm_mm = 0xffff88030f5644c0
+crash> tree -t rbtree  -r address_space.i_mmap -o vm_area_struct.shared  -s vm_area_struct.vm_mm  0xffff880285232b81
+1ffff88028522d3
+tree: invalid kernel virtual address: 1ffff880285233b  type: "rb_node rb_left"
+crash> struct mm_struct.owner 0xffff880e594e2bc0
+  owner = 0xffff880104d2dc00
+crash> struct mm_struct.owner 0xffff88030f5644c0
+  owner = 0xffff880128009700
+
+crash> struct task_struct.pid,comm  0xffff880104d2dc00
+  pid = 15855
+  comm = "ovdk-ovsdk\000stop"
+crash> struct task_struct.pid,comm  0xffff880128009700
+  pid = 15899
+  comm = "ovdk-ovsvswitch"
+=---》 找到4G巨页，被ovdk-ovsdk和ovdk-ovsvswitch 占用。
+  
+ 
+crash> kmem 0xffff880285232b81
+CACHE            NAME                 OBJSIZE  ALLOCATED     TOTAL  SLABS  SSIZE
+ffff88085f878000 anon_vma                  56      16413     18176    284     4k
+  SLAB              MEMORY            NODE  TOTAL  ALLOCATED  FREE
+  ffffea000a148c80  ffff880285232000     0     64         30    34
+  FREE / [ALLOCATED]
+  [ffff880285232b80]
+---》属于匿名内存 
+
+      PAGE        PHYSICAL      MAPPING       INDEX CNT FLAGS
+ffffea000a148c80 285232000                0 ffff880285232d80  1 2fffff00000080 slab
+crash> 
+crash> kmem   0xffff880e5a26a2a0
+CACHE            NAME                 OBJSIZE  ALLOCATED     TOTAL  SLABS  SSIZE
+ffff880e5b3e6800 hugetlbfs_inode_cache    600       1074      1643     31    32k
+  SLAB              MEMORY            NODE  TOTAL  ALLOCATED  FREE
+  ffffea0039689a00  ffff880e5a268000     1     53         40    13
+  FREE / [ALLOCATED]
+  [ffff880e5a26a140]
+  
+---》 0x2fffff00000080  =  0xffff880285232b81 -1
+
+      PAGE        PHYSICAL      MAPPING       INDEX CNT FLAGS
+ffffea0039689a80 e5a26a000                0        0  0 6fffff00008000 tail
+crash> struct anon_vma
+struct anon_vma {
+    struct anon_vma *root;
+    struct rw_semaphore rwsem;
+    atomic_t refcount;
+    struct rb_root rb_root;
+}
+SIZE: 56
+
+crash> tree -t rbtree  -r anon_vma.rb_root -o anon_vma_chain.rb -s anon_vma_chain    0xffff880285232b80
+ffff880e5ad40e00
+struct anon_vma_chain {
+  vma = 0xffff880310f8e6c0, 
+  anon_vma = 0xffff880285232b80, 
+  same_vma = {
+    next = 0xffff880310f8e738, 
+    prev = 0xffff880310f8e738
+  }, 
+  rb = {
+    __rb_parent_color = 1, 
+    rb_right = 0x0, 
+    rb_left = 0x0
+  }, 
+  rb_subtree_last = 262143
+}
+crash> struct vm_area_struct.vm_mm 0xffff880310f8e6c0
+  vm_mm = 0xffff880e5a2c12c0
+crash> struct mm_struct.owner  0xffff880e5a2c12c0
+  owner = 0xffff880933cd7300
+crash> struct task_struct.pid,comm  0xffff880933cd7300
+  pid = 25588
+  comm = "java\000)\000\000\060\000\000\000\000\000\000"
+---》按照数据结构解析，找到它属于java进程。
+  
+  
