@@ -17,7 +17,6 @@ systemd自动删掉 glusterd、 basic、sysinit这条路径上的，重新执行
 [  469.071801] systemd[1]: Found dependency on sysinit.target/stop
 [  469.082864] systemd[1]: Found dependency on local-fs.target/stop
 [  469.094071] systemd[1]: Found dependency on gfs2\x2dd8a4c0a0\x2d159e\x2d4329\x2d8f48\x2dc2b2ce545415\x2dgfs2\x2dfc\x2d2-fs_stress.mount/stop
-[  469.118661] systemd[1]: Found dependency on opt-zxve-storage-gfs2\x2dd8a4c0a0\x2d159e\x2d4329\x2d8f48\x2dc2b2ce545415\x2dgfs2\x2dfc\x2d2.mount/stop
 [  469.142658] systemd[1]: Found dependency on network-online.target/stop
 [  469.154707] systemd[1]: Breaking ordering cycle by deleting job glusterd.service/stop
 [  469.168215] systemd[1]: Job glusterd.service/stop deleted to break ordering cycle starting with network-online.target/stop
@@ -27,7 +26,7 @@ systemd自动删掉 glusterd、 basic、sysinit这条路径上的，重新执行
 
 原因分析：
 # mount | grep stress
-/opt/zxve/storage/gfs2-d8a4c0a0-159e-4329-8f48-c2b2ce545415-gfs2-fc-2/fstress.img on /opt/....../storage/gfs2-d8a4c0a0-159e-4329-8f48-c2b2ce545415-gfs2-fc-2/fs_stress type ext4 (rw,relatime,data=ordered,_netdev)
+/opt/xxx/storage/gfs2-d8a4c0a0-159e-4329-8f48-c2b2ce545415-gfs2-fc-2/fstress.img on /opt/....../storage/gfs2-d8a4c0a0-159e-4329-8f48-c2b2ce545415-gfs2-fc-2/fs_stress type ext4 (rw,relatime,data=ordered,_netdev)
 
 这个文件实际上在网络上，但是文件是格式化为本地文件系统，如ext4，那么挂载的时候，systemd识别不出来，会将
 挂载后的文件系统纳入依赖管理，加入到local-fs.target组的依赖中，而它其实应该加入
