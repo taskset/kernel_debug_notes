@@ -1,0 +1,48 @@
+
+问题：iscsi出现panic
+RIP: e030:[<ffffffffa03cb4da>]  [<ffffffffa03cb4da>] fail_scsi_task+0x3a/0xb0 [libiscsi]
+
+分析vmcore：
+iscsid调用:iscsi_sw_tcp_conn_stop->iscsi_conn_stop->fail_scsi_tasks->fail_scsi_task->iscsi_complete_task->__iscsi_put_task->scsi_done->blk_complete_request->__blk_complete_request,发生空指针异常.
+
+request的q字段为0,生成时间为5152115965：
+crash> struct request  ffff88019c174818
+struct request {
+  queuelist = {
+    ......
+  q = 0x0,
+  cmd_flags = 512,
+  cmd_type = REQ_TYPE_FS,
+  atomic_flags = 1,
+  cpu = 20,
+....
+  start_time = 5152115965,
+  start_time_ns = 857514380415182,
+  io_start_time_ns = 0,
+
+分析iscsi_task 结构，last_xfer 字段为5151994471
+crash> struct  iscsi_task  ffff8802de6cdc00
+struct iscsi_task {
+  ......
+  conn = 0xffff8803077bca70,
+  last_xfer = 5151994471,
+  last_timeout = 5152055961,
+  have_checked_conn = true,
+...
+按道理iscsi_task->sc->request, iscsi_task使用的request应该至少比5151994471早，这里却比它晚了，说明iscsi_task->sc->request所指向的request发生了变化，被回收了，而且重新分配给别人使用了。
+
+然后分析代码，发现合入的限制SCSI错误处理时间的补丁(https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux-stable.git/commit/?id=b45620229dd67ff1daffa8adce57f37b37860f78)，可能会导致iSCSI出现这种问题。
+当iSCSI命令在网络延时很大的场景下，代码路径：
+scsi_error_handler->scsi_unjam_host->scsi_eh_abort_cmds
+以前的代码,在这里会调用iscsi的iscsi_eh_abort回调函数,释放iscsi_task以及所引用的request，所以没有问题；
+加上"限制SCSI错误处理时间的补丁"后，可能在scsi_eh_abort_cmds 就直接返回，不去执行iscsi_eh_abort。
+然后继续执行scsi_eh_ready_devs函数，如果有eh_host_reset_handler回调函数的话，会通过存储芯片驱动来修复错误。
+但是iSCSI没有eh_host_reset_handler回调函数，所以host_reset这一步也直接略过了。
+
+再继续执行scsi_eh_offline_sdevs、scsi_eh_flush_done_q->scsi_finish_command->scsi_io_completion->scsi_end_request,这样就释放了request.
+
+但是iscsi层有可能还在继续使用这个request,导致问题。
+
+修复方法：
+https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux-stable.git/commit/?id=ad469a57643b322dc7a3bfc482e265e1e88f735a
+
