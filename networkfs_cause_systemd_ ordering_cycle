@@ -1,0 +1,43 @@
+
+reboot时，系统一直卡住；
+接串口，看到systemd报依赖成环了：
+
+network-online.target -> glusterd.service -> basic.target -> paths.target-> ......gfs2\x2dd8a4c0a0\x2d159e\x2d4329\x2d8f48\x2dc2b2ce545415\x2dgfs2\x2dfc\x2d2.mount
+->network-online.target
+
+systemd自动删掉 glusterd、 basic、sysinit这条路径上的，重新执行reboot.target，
+仍然无法执行成功。
+
+[  468.879907] systemd[1]: Trying to enqueue job reboot.target/start/replace-irreversibly
+[  469.015540] systemd[1]: Found ordering cycle on network-online.target/stop
+[  469.027724] systemd[1]: Found dependency on glusterd.service/stop
+[  469.039126] systemd[1]: Found dependency on basic.target/stop
+[  469.050096] systemd[1]: Found dependency on paths.target/stop
+[  469.060886] systemd[1]: Found dependency on brandbot.path/stop
+[  469.071801] systemd[1]: Found dependency on sysinit.target/stop
+[  469.082864] systemd[1]: Found dependency on local-fs.target/stop
+[  469.094071] systemd[1]: Found dependency on gfs2\x2dd8a4c0a0\x2d159e\x2d4329\x2d8f48\x2dc2b2ce545415\x2dgfs2\x2dfc\x2d2-fs_stress.mount/stop
+[  469.118661] systemd[1]: Found dependency on opt-zxve-storage-gfs2\x2dd8a4c0a0\x2d159e\x2d4329\x2d8f48\x2dc2b2ce545415\x2dgfs2\x2dfc\x2d2.mount/stop
+[  469.142658] systemd[1]: Found dependency on network-online.target/stop
+[  469.154707] systemd[1]: Breaking ordering cycle by deleting job glusterd.service/stop
+[  469.168215] systemd[1]: Job glusterd.service/stop deleted to break ordering cycle starting with network-online.target/stop
+[  469.185346] systemd[1]: Deleting job basic.target/stop as dependency of job glusterd.service/stop
+[  469.200203] systemd[1]: Deleting job sysinit.target/stop as dependency of job basic.target/stop
+[  469.267249] systemd[1]: Installed new job reboot.target/start as 1685
+
+原因分析：
+# mount | grep stress
+/opt/zxve/storage/gfs2-d8a4c0a0-159e-4329-8f48-c2b2ce545415-gfs2-fc-2/fstress.img on /opt/....../storage/gfs2-d8a4c0a0-159e-4329-8f48-c2b2ce545415-gfs2-fc-2/fs_stress type ext4 (rw,relatime,data=ordered,_netdev)
+
+这个文件实际上在网络上，但是文件是格式化为本地文件系统，如ext4，那么挂载的时候，systemd识别不出来，会将
+挂载后的文件系统纳入依赖管理，加入到local-fs.target组的依赖中，而它其实应该加入
+remote-fs.target组（-o _netdev），这样导致它和网络的关机顺序出现错误。
+
+规避方法是在mount的时候需要添加option：-o _netdev。
+
+如果已经是gfs、gulsterfs 不加选项也是可以的
+mount -t glusterfs 192.168.100.2:/my_volume /var/lib/my_path
+---》比如这种，就可以不加，systemd可以识别出来：
+
+mount /opt/xxx/storage/gfs2-d8a4c0a0-159e-4329-8f48-c2b2ce545415-gfs2-fc-2/fstress.img    /opt/xxx/storage/gfs2-d8a4c0a0-159e-4329-8f48-c2b2ce545415-gfs2-fc-2/fs_stress  -o _netdev
+--》但如果这种,就要加了。
