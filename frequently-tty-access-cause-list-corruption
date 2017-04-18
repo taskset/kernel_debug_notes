@@ -1,0 +1,485 @@
+1．	问题现象
+发现5次服务器异常重启，几次异常时间间隔半年左右，出现的频率很低，收集到了5次故障的vmcore文件。
+
+2．	问题分析
+2.1 常规日志分析
+查看现场发回的出错堆栈，先是socket_wq队列链表报错，然后紧跟tty内核HARD Lockup打印，出错现象一致，可以确定几次系统panic是同一故障。
+现场用户发回了故障环境的操作系统日志。首先，发现链表被破坏，打印错误信息，但是系统仍然在运行。日志如下：
+[4961869.917738] WARNING: at lib/list_debug.c:29 __list_add+0x65/0xc0()
+[4961869.918300] list_add corruption. next->prev should be prev (ffff880fe02c3d08), but was ffff880fe02e3d08. (next=ffff880fe02c3d08).
+……
+ [4961869.926912] CPU: 1 PID: 1660 Comm: sshd Tainted: GF          O--------------   3.10.0-123.el7.x86_64 #1
+……
+[4961869.933275] Call Trace:
+[4961869.934600]  [<ffffffff815e199a>] dump_stack+0x19/0x1b
+[4961869.935555]  [<ffffffff8105dee1>] warn_slowpath_common+0x61/0x80
+[4961869.936521]  [<ffffffff8105df5c>] warn_slowpath_fmt+0x5c/0x80
+[4961869.937494]  [<ffffffff812d0315>] __list_add+0x65/0xc0
+[4961869.938476]  [<ffffffff81086741>] add_wait_queue+0x31/0x50
+[4961869.939469]  [<ffffffff811c390f>] __pollwait+0x7f/0xf0
+[4961869.940471]  [<ffffffff810975d6>] ? try_to_wake_up+0x1b6/0x280
+[4961869.941487]  [<ffffffff814c5259>] datagram_poll+0x29/0x100
+[4961869.942518]  [<ffffffff814fbba3>] netlink_poll+0x83/0x1e0
+[4961869.943533]  [<ffffffff814b7630>] sock_poll+0xf0/0x100
+[4961869.944532]  [<ffffffff811c4fd7>] do_sys_poll+0x327/0x580
+[4961869.945543]  [<ffffffff814c0f8e>] ? skb_free_head+0x1e/0x70
+[4961869.946565]  [<ffffffff814c10b6>] ? skb_release_data+0xd6/0x110
+[4961869.947598]  [<ffffffff814be797>] ? kfree_skbmem+0x37/0x90
+[4961869.948641]  [<ffffffff814c1364>] ? consume_skb+0x34/0x80
+[4961869.949694]  [<ffffffff814fd5a5>] ? netlink_unicast+0xf5/0x1b0
+[4961869.950758]  [<ffffffff814fd7b4>] ? netlink_sendmsg+0x154/0x760
+[4961869.951830]  [<ffffffff811c3890>] ? poll_initwait+0x50/0x50
+[4961869.952911]  [<ffffffff811c3b00>] ? poll_select_copy_remaining+0x150/0x150
+[4961869.954011]  [<ffffffff814b6c36>] ? sock_aio_read.part.7+0x146/0x160
+[4961869.955121]  [<ffffffff815e9319>] ? tty_unlock+0x29/0x50
+[4961869.956240]  [<ffffffff814b7f01>] ? SYSC_sendto+0x121/0x1c0
+[4961869.957372]  [<ffffffff8101a0d9>] ? read_tsc+0x9/0x20
+[4961869.958512]  [<ffffffff810b68f8>] ? ktime_get_ts+0x48/0xe0
+[4961869.959660]  [<ffffffff811c5334>] SyS_poll+0x74/0x110
+[4961869.960818]  [<ffffffff815f20d9>] system_call_fastpath+0x16/0x1b
+[4961869.961989] ---[ end trace e607105d6a1195ff ]---
+紧接着(24秒后)，检测到hard LOCKUP，发生panic。日志如下：
+[4961893.383527] Kernel panic - not syncing: Watchdog detected hard LOCKUP on cpu 0
+[4961893.384708] CPU: 0 PID: 1663 Comm: bash Tainted: GF       W  O--------------   3.10.0-123.el7.x86_64 #1
+[4961893.385851] Hardware name: HP ProLiant BL460c Gen8, BIOS I31 08/02/2014
+[4961893.387020]  ffffffff817f6830 00000000c1007a7f ffff880fffa06c48 ffffffff815e199a
+[4961893.388353]  ffff880fffa06cc8 ffffffff815db529 0000000000000010 ffff880fffa06cd8
+[4961893.389803]  ffff880fffa06c78 00000000c1007a7f 0000000000000000 0000000000000000
+[4961893.391367] Call Trace:
+[4961893.392418]  <NMI>  [<ffffffff815e199a>] dump_stack+0x19/0x1b
+[4961893.393476]  [<ffffffff815db529>] panic+0xd8/0x1e7
+[4961893.394492]  [<ffffffff810f6600>] ? watchdog_enable_all_cpus.part.2+0x40/0x40
+[4961893.395489]  [<ffffffff810f66c2>] watchdog_overflow_callback+0xc2/0xd0
+[4961893.396457]  [<ffffffff81137741>] __perf_event_overflow+0xa1/0x250
+[4961893.397394]  [<ffffffff811364c9>] ? perf_event_update_userpage+0x19/0x100
+[4961893.398304]  [<ffffffff81138304>] perf_event_overflow+0x14/0x20
+[4961893.399184]  [<ffffffff8102929d>] intel_pmu_handle_irq+0x1cd/0x3f0
+[4961893.400040]  [<ffffffff815eaf4b>] perf_event_nmi_handler+0x2b/0x50
+[4961893.400900]  [<ffffffff815ea699>] nmi_handle.isra.0+0x69/0xb0
+[4961893.401724]  [<ffffffff815ea849>] do_nmi+0x169/0x340
+[4961893.402544]  [<ffffffff815e9af1>] end_repeat_nmi+0x1e/0x2e
+[4961893.403360]  [<ffffffff815e9177>] ? _raw_spin_lock_irqsave+0x47/0x60
+[4961893.404168]  [<ffffffff815e9177>] ? _raw_spin_lock_irqsave+0x47/0x60
+[4961893.404963]  [<ffffffff815e9177>] ? _raw_spin_lock_irqsave+0x47/0x60
+[4961893.405743]  <<EOE>>  [<ffffffff81090a03>] __wake_up+0x23/0x50
+[4961893.406884]  [<ffffffff8137777b>] tty_ldisc_deref+0x5b/0xa0
+[4961893.407678]  [<ffffffff8136fb6c>] tty_read+0x9c/0x100
+[4961893.408472]  [<ffffffff811af97c>] vfs_read+0x9c/0x170
+[4961893.409256]  [<ffffffff811b04a8>] SyS_read+0x58/0xb0
+[4961893.410036]  [<ffffffff815f20d9>] system_call_fastpath+0x16/0x1b
+链表破坏后，系统再发生panic，vmcore中已经没有链表破坏瞬间的信息了。所以使用vmcore只能分析hard LOCKUP问题。查看堆栈：
+#14 [ffff880f7f869ec0] tty_read at ffffffff8136fb6c
+    ffff880f7f869ec8: ffff880fe02c3d00 00007fff896aef67 
+    ffff880f7f869ed8: ffff880fdd206a00 00007fff896aef67 
+    ffff880f7f869ee8: ffff880f7f869f48 0000000000000000 
+    ffff880f7f869ef8: 00007fff896af1a0 ffff880f7f869f30 
+    ffff880f7f869f08: ffffffff811af97c 
+#15 [ffff880f7f869f08] vfs_read at ffffffff811af97c
+反汇编tty_read函数：
+dis -l  tty_read
+/usr/src/debug/kernel-3.10.0-123.el7/linux-3.10.0-123.el7.x86_64/drivers/tty/tty_io.c: 1035
+0xffffffff8136fb5d <tty_read+141>:  mov    -0x38(%rbp),%r8
+/usr/src/debug/kernel-3.10.0-123.el7/linux-3.10.0-123.el7.x86_64/drivers/tty/tty_io.c: 1032
+0xffffffff8136fb61 <tty_read+145>:  mov    %rax,%rbx
+/usr/src/debug/kernel-3.10.0-123.el7/linux-3.10.0-123.el7.x86_64/drivers/tty/tty_io.c: 1035
+0xffffffff8136fb64 <tty_read+148>:  mov    %r8,%rdi
+0xffffffff8136fb67 <tty_read+151>:  callq  0xffffffff81377720 <tty_ldisc_deref>
+
+解析tty_read函数堆栈中的变量（struct tty_ldisc *ld），发现它已经被破坏了：
+crash> struct tty_ldisc  ffff880fe02c3d00 
+struct tty_ldisc {
+  ops = 0xffff880f00040004, 
+  users = {
+    counter = -533971704
+  }, 
+  wq_idle = {
+    lock = {
+      {
+        rlock = {
+          raw_lock = {
+            {
+              head_tail = 3760995592, 
+              tickets = {
+                head = 15624, 
+                tail = 57388
+              
+    }, 
+    task_list = {
+      next = 0x0, 
+      prev = 0xffff880fe588ad00
+由于tty_read函数中的struct tty_ldisc *ld变量被破坏，所以在调用后面的tty_ldisc_deref时，传入的参数是错误的，导致长时间关闭中断，从而引起了hard LOCKUP。
+
+2.2分析规律
+问题1：list_corruption、hard lockup 地址之间的关系？
+观察到tty_read函数堆栈中出错的ld变量地址（ffff880fe02c3d00），tty_ldisc对象的大小是40字节:
+crash> struct -o tty_ldisc
+struct tty_ldisc {
+   [0] struct tty_ldisc_ops *ops;
+   [8] atomic_t users;
+  [16] wait_queue_head_t wq_idle;
+}
+SIZE: 40
+包含了第一个链表中破坏的地址(ffff880fe02c3d08)，可以怀疑两个流程使用的是同一块内存。
+
+问题2：list_corruption的地址之间的关系？
+[4961869.918300] list_add corruption. next->prev should be prev (ffff880fe02c3d08), but was ffff880fe02e3d08. (next=ffff880fe02c3d08).
+两个地址之间的规律：
+ffff880fe02c3d08
+ffff880fe02e3d08
+低4字节中的第3字节相差2，所有vmcore都是如此。
+分析代码，解释上面的两个问题：
+
+crash> struct -o tty_ldisc
+struct tty_ldisc {
+   [0] struct tty_ldisc_ops *ops;
+   [8] atomic_t users;
+  [16] wait_queue_head_t wq_idle;
+}
+SIZE: 40
+crash> struct -o socket_wq
+struct socket_wq {
+   [0] wait_queue_head_t wait;
+  [24] struct fasync_struct *fasync_list;
+  [32] struct callback_head rcu;
+}
+SIZE: 64
+
+----》结构体大小上看，有可能是同一块64字节的slab。
+
+crash> struct -o  wait_queue_head_t
+typedef struct __wait_queue_head {
+   [0] spinlock_t lock;
+   [8] struct list_head task_list;
+} wait_queue_head_t;
+SIZE: 24
+crash> struct -o  list_head
+struct list_head {
+   [0] struct list_head *next;
+   [8] struct list_head *prev;
+}
+SIZE: 16
+
+====>
+struct tty_ldisc {
+   [0] struct tty_ldisc_ops *ops;
+   [8] atomic_t users;
+  [16] wait_queue_head_t wq_idle; --->[16] spinlock_t lock;
+                                       [24] struct list_head *next;  
+[32] struct list_head *prev;
+}
+
+
+struct socket_wq {
+   [0] wait_queue_head_t wait; ---->[0] spinlock_t lock;
+                                     [8] struct list_head *next;
+  [16] struct list_head *prev;
+  [24] struct fasync_struct *fasync_list;
+  [32] struct callback_head rcu;
+}
+
+-----》结构体对齐上看，tty的[16] spinlock_t lock 刚好对应 socket_wq 的[16] struct list_head *prev。
+
+crash> struct -o arch_spinlock
+struct arch_spinlock {
+      union {
+  [0]     __ticketpair_t head_tail;
+  [0]     struct __raw_tickets tickets;
+      };
+}
+SIZE: 4
+crash> __ticketpair_t
+typedef unsigned int __ticketpair_t;
+SIZE: 4
+crash> struct -o __raw_tickets
+struct __raw_tickets {
+  [0] __ticket_t head;
+  [2] __ticket_t tail;
+}
+SIZE: 4
+
+crash> __ticket_t
+typedef unsigned short __ticket_t;
+SIZE: 2
+
+#define __TICKET_LOCK_INC	2
+#define TICKET_SHIFT	(sizeof(__ticket_t) * 8)
+
+2<< 16 = 65536 = 0x10000
+
+---》  tail （3-2）  |  head（1-0）
+
+-----》数据破坏的规律上看，刚好也对的上。
+
+
+问题3：进程id之间有什么关系？
+出错收集到的进程sshd和bash的pid信息：
+[4961869.926912] CPU: 1 PID: 1660 Comm: sshd Tainted: GF          O--------------   3.10.0-123.el7.x86_64 #1
+[4961893.384708] CPU: 0 PID: 1663 Comm: bash Tainted: GF       W  O--------------   3.10.0-123.el7.x86_64 #1
+进程号很接近，分析sshd可能是bash进程的父亲，但是由于sshd进程已经退出，不能完全确认它们的父子关系。一般远程ssh登录到本地，就会出现sshd进程fork子进程sshd，sshd再fork子进程bash，bash中会打开pty。
+
+问题4：tty结构有缓冲区，能否解析出来，观察残留的信息？ 
+解析出错bash进程的pty缓存中残留的字符串信息：
+crash> struct tty_struct.name,pgrp,session,count,write_buf,port    0xffff880fa629c800
+  name = "ptm6
+  pgrp = 0x0
+  session = 0x0
+  count = 0
+  write_buf = 0xffff880fe8924000 "ls --color=none /home/xxuser/klinux_memory.sh\r"
+  port = 0xffff88010e543800
+
+crash> struct tty_buffer 0xffff880fa629cc00
+struct tty_buffer {
+  next = 0x0, 
+  char_buf_ptr = 0xffff880fa629cc28 "Last login: Wed May 18 06:21:06 2016 from 192.168.205.102\r\r\n[ituser@xxx-compute81 ~]#ls --color=none /home/xxuser/klinux_memory.sh\r\n/home/xxx/klinux_memory.sh\r\n[ituser@xxx-compute81 ~]#", 
+  flag_buf_ptr = 0xffff880fa629cd28 "", 
+  used = 216, 
+  size = 256, 
+  commit = 216, 
+  read = 216, 
+  data = 0xffff880fa629cc28
+}
+可以推测，bash进程正在执行/home/xxx/目录下的脚本。
+继续排查其他几个vmcore，发现出错的bash进程都正在执行/home/xxuser/目录下的脚本。
+再登录到现场环境，分析打开/dev/pts/* 的进程：
+ 
+
+其调用关系如下：
+xxuser登录--> bash(23533) --> sh(24284) --> sh(24290)--> iostat(24291)
+                                                     --> tail(24292)
+这些进程都同享/dev/pts/5 。
+再对5个节点（10/11/12/54/91）,统计xxuser登录的频率，确实很频繁的登录。
+得出现场业务的特征： ituser用户频繁登录，执行/home/xxuser/*.sh脚本，父子进程并发访问tty。
+故障反推
+由上面的几个问题，总结业务模型总结如下：
+java(ituser用户)  --远程连接-->   sshd 服务
+                                   sshd: ituser2 [priv] (使用ptm)
+sshd: ituser2@pts/2 (使用ptm)
+sh进程、若干bash进程，执行/home/xxuser/目录下的脚本 (使用pts)
+
+总结故障特征：
+sshd进程的ptm已经被释放了，bash进程的pts也标记为释放；
+sshd的进程的netlink套接字的socket_wq队列被破坏（第一个堆栈）；
+bash进程的pts->ldisc 被破坏（第二个堆栈）；
+socket_wq和ldisc使用了相同的64字节slab。
+
+分析代码：
+void tty_ldisc_deref(struct tty_ldisc *ld)
+{
+......
+	raw_spin_lock_irqsave(&tty_ldisc_lock, flags);
+	/*
+	 * WARNs if one-too-many reader references were released
+	 * - the last reference must be released with tty_ldisc_put
+	 */
+	WARN_ON(atomic_dec_and_test(&ld->users));  --->这里把引用计数减1，有可能另一个进程会释放掉ld；ld在释放后又可能被分配给sshd的socket_wq （因为都是64字节的slab）
+	raw_spin_unlock_irqrestore(&tty_ldisc_lock, flags);
+
+	 --->这下面使用的就可能是已经释放的ld，bash进程会出错
+	if (waitqueue_active(&ld->wq_idle))
+		wake_up(&ld->wq_idle); --->这个地方会对spinlock 进行+2 操作，又破坏了sshd的socket_wq, sshd进程的链表又出错。
+}
+
+推测故障时时序：
+cpu0									| cpu1
+sshd									| bash
+ -> do_exit								|   -> n_tty_read
+   -> pty_close							|
+    -> hangup(slave)						|	
+     -> wake_up bash 并等待ldisc引用计数为1			|    -> tty_ldisc_deref 减ldsic引用计数
+      -> ldisc引用计数为1，调用ldisc_reini释放ldisc		|	     -> 释放tty_ldisc_lock后，bash进程被中断打断
+       -> sshd进程释放						|	
+        -> audit的api，创建netlink socket			|
+         -> 申请到之前ldisc对应slab做socket_wq，并初始化	|	
+         ->								|      ->引用错误ldisc，操作spinlock，进入死锁状态
+	  -> 检测到链表被破坏
+
+推测现场的大致流程：
+1）现场java信息采集程序ssh连接到服务器，服务器上sshd进程和bash进程分别被调度到不同的CPU，sshd在CPU1上，bash在CPU0上
+2）ssh连接出现异常，服务端sshd进程发起释放流程，并开始释放tty终端
+3）bash被sshd唤醒减掉对tty终端的引用计数，sshd检测到引用计数被减掉，经过一系列处理后释放tty_ldisc结构
+4）bash在减引用计数后，被中断程序打断
+5）tty_ldisc结构被sshd释放后进入该CPU的slab cache
+6）sshd继续释放流程需要netlink socket与系统中其他进程通信，此时需要申请64字节大小的slab，刚好从cache中取到之前被释放的tty_ldisc结构对应的内存，并进行相应的初始化
+7）CPU0上的bash进程从中断中返回，继续访问tty_ldisc结构，尝试获取相应的锁，累加锁的序号
+8）由于被bash进程修改，sshd进程检测到链表被破坏（list corruption）并打印warning
+9）由于被sshd进程修改，bash进程获取锁发生死锁，NMI watchdog检测到异常触发panic重启
+
+3．	故障复现
+根据上面的分析，想法复现故障：
+1)、不动内核代码，完全用户态模拟(包括进程绑核、netperf施加中断压力、运行网管的java客户端频繁链接、编写测试代码频繁链接、频繁构造ssh异常)，都无法复现。
+2)、针对性的修改内核代码，可以复现。
+
+问题：单纯用户态模拟复现不了，但修改内核代码可以复现，能否认为问题已经分析清楚？
+4．	故障修复
+1)、解决方法：
+https://git.kernel.org/cgit/linux/kernel/git/torvalds/linux.git/commit/drivers/tty?id=36697529b5bbe36911e39a6309e7a7c9250d280a
+
+修改了ldisc的加锁机制，从而避免了这个问题。但前置补丁较多。centos 7.2 已经合入了。
+
+2)、规避方法：sshd复位绑核
+能够规避的原因：taskset设置sshd服务的cpu亲和性，调用sched_setaffinity，把cpu掩码设置到task_struct 的cpus_allowed里面，调度的时候，就只会在掩码允许的cpu上执行。sshd服务的产生子进程时，子进程继承父进程的cpu亲和性，也只会在掩码允许的cpu上执行。这样ssh、bash都是串行执行，从而避免了这个问题。
+
+5．	扩展学习
+为什么ticket_spinlock 每次加2？
+ticket_spinlock的原理？
+顺便扩展学习一下？
+ 
+
+========================begin
+
+1，ticket spinlock相关定义如下：
+
+/* Increment the ticket by 2, to leave a bit free for pvspinlock */  
+#define __TICKET_LOCK_INC	2
+#ifdef CONFIG_PARAVIRT_SPINLOCKS
+#define TICKET_SLOWPATH_FLAG   ((__ticket_t)1)
+#else
+#define TICKET_SLOWPATH_FLAG   ((__ticket_t)0)
+#endif
+
+---》增加2的原因应该是为了支持半虚拟化， 见补丁：
+http://git.kernel.org/cgit/linux/kernel/git/stable/linux-stable.git/commit/?id=4a1ed4ca681e7df38ed1b609a11aab38cbc515b3
+
+#if (CONFIG_NR_CPUS < (256 / __TICKET_LOCK_INC))
+typedef u8  __ticket_t;
+typedef u16 __ticketpair_t;
+#else
+typedef u16 __ticket_t;
+typedef u32 __ticketpair_t;
+#endif
+
+#define TICKET_LOCK_INC	((__ticket_t)__TICKET_LOCK_INC)
+
+#define TICKET_SHIFT	(sizeof(__ticket_t) * 8)
+
+---》16比特的原因：
+config中定义的支持cpu核的数目：CONFIG_NR_CPUS=5120，大于256，所以__ticket_t要2字节才够。
+
+--》问题：如果单核，又怎么样呢？
+
+include/linux/spinlock_api_up.h
+/*
+ * In the UP-nondebug case there's no real locking going on, so the
+ * only thing we have to do is to keep the preempt counts and irq
+ * flags straight, to suppress compiler warnings of unused lock
+ * variables, and to add the proper checker annotations:
+ */
+#define __LOCK(lock) \
+  do { preempt_disable(); __acquire(lock); (void)(lock); } while (0)
+
+单核中，spin_lock不起作用（仅仅是关闭内核抢占，而cgsl系统中，默认没有打开内核抢占的：# CONFIG_PREEMPT is not set）。
+
+--》使用spinlock_api_up.h还是spinlock_api_smp.h文件，好像是编译时决定的:                   
+#if defined(CONFIG_SMP) || defined(CONFIG_DEBUG_SPINLOCK)
+# include <linux/spinlock_api_smp.h>
+#else
+# include <linux/spinlock_api_up.h>
+#endif
+
+--》问题：如果编译的smp版本，但是运行的cpu只有一个，可能性能会降低，因为没有编译优化，执行了无用的代码。
+
+
+==================================================================
+
+2，原理：
+typedef struct arch_spinlock {
+	union {
+		__ticketpair_t head_tail;
+		struct __raw_tickets {
+			__ticket_t head, tail;
+		} tickets;
+	};
+} arch_spinlock_t;
+
+#define __ARCH_SPIN_LOCK_UNLOCKED	{ { 0 } }
+
+可以简化为这个模型：
+tail(next)3-2字节   |  head(owner) 1-0字节
+
+以银行排号服务为例：
+tail(next)：3-2字节，表示下一次请求锁给其分配的票号，类似于银行排号机上取的号
+head(owner)：1-0字节，表示当前可以取得锁的票号，类似于银行柜台工作人员正在服务的号
+next和owner初始化为0。
+
+当lock.next = slock.owner时，表示该锁处于空闲状态，可以获得锁。
+
+spin_lock加锁时执行如下过程：
+  my_ticket = slock.next                     (从排号机上取号)
+  slock.next++                               (排号机下一位的号增加)
+  wait until my_ticket = slock.owner         (spin：循环比对柜台叫的号是否等于自己手中的号，如果等于则加锁成功)
+
+spin_unlock执行如下过程：
+  slock.owner++                               (类似于柜台叫下一位的号)
+
+http://lwn.net/Articles/267968/
+If you have ever been to a store where customers take paper tickets to ensure that they are served in the order of arrival, you can think of the "next" field as being the number on the next ticket in the dispenser, while "owner" is the number appearing in the "now serving" display over the counter.
+
+========================================
+
+3，实现：
+
+/*
+ * Ticket locks are conceptually two parts, one indicating the current head of
+ * the queue, and the other indicating the current tail. The lock is acquired
+ * by atomically noting the tail and incrementing it by one (thus adding
+ * ourself to the queue and noting our position), then waiting until the head
+ * becomes equal to the the initial value of the tail.
+ *
+ * We use an xadd covering *both* parts of the lock, to increment the tail and
+ * also load the position of the head, which takes care of memory ordering
+ * issues and should be optimal for the uncontended case. Note the tail must be
+ * in the high part, because a wide xadd increment of the low part would carry
+ * up and contaminate the high part.
+ */
+static __always_inline void arch_spin_lock(arch_spinlock_t *lock)
+{
+	register struct __raw_tickets inc = { .tail = TICKET_LOCK_INC };
+
+	inc = xadd(&lock->tickets, inc);
+	if (likely(inc.head == inc.tail))
+		goto out;
+
+	inc.tail &= ~TICKET_SLOWPATH_FLAG;
+	for (;;) {
+		unsigned count = SPIN_THRESHOLD;
+
+		do {
+			if (ACCESS_ONCE(lock->tickets.head) == inc.tail)
+				goto out;
+			cpu_relax();
+		} while (--count);
+		__ticket_lock_spinning(lock, inc.tail);
+	}
+out:	barrier();	/* make sure nothing creeps before the lock is taken */
+}
+
+
+----》本来逻辑很清晰的，也是为了支持半虚拟化而变得复杂：
+http://git.kernel.org/cgit/linux/kernel/git/stable/linux-stable.git/commit/?id=545ac13892ab391049a92108cf59a0d05de7e28c
+http://git.kernel.org/cgit/linux/kernel/git/stable/linux-stable.git/commit/?id=96f853eaa889c7a22718d275b0df7bebdbd6780e
+
+
+=============================
+
+4，再扩展学习：
+
+根据上面的分析，ticket_spinlock 获取锁的顺序是FIFO的：
+
+a, 有些场景对共享资源的访问可以可以区分读和写的，可以允许多个读的进程进入临界区
+---》读写spinlock：rwlock_t
+
+b，有些进程的优先级很高，但是排在后面，迟迟得不到锁
+---》把spinlock改造为rt_mutex、linux的实时补丁
+http://www.ibm.com/developerworks/cn/linux/l-lrt/part2/index.html
+https://git.kernel.org/cgit/linux/kernel/git/rt/linux-stable-rt.git/
+
+c，我们是否也更改一下spinlock的机制?
+比如银行排号服务的例子，能否对普通进程、vip进程分开排号：
+把：
+next   |  owner
+类似于扩展为：
+vip_next | vip_owner | normal_next | normal_owner
+
+应该有应用场景，不知道开源有没有这样的，我们一起分析、实现？
+
+===================================== end
