@@ -1,0 +1,124 @@
+1，故障现象：
+trace:
+Kernel panic - not syncing: Watchdog detected hard LOCKUP on cpu 15
+Pid: 9711, comm: ZMSSMediaProces Not tainted 2.6.32-220.el6.x86_64 #1
+Call Trace:
+ <NMI>  [<ffffffff814f8484>] ? panic+0x8b/0x156
+ [<ffffffff810dac1a>] ? watchdog_overflow_callback+0x1fa/0x200
+ [<ffffffff8110cb3d>] ? __perf_event_overflow+0x9d/0x230
+ [<ffffffff8110d0f4>] ? perf_event_overflow+0x14/0x20
+ [<ffffffff8101e396>] ? intel_pmu_handle_irq+0x336/0x550
+ [<ffffffff814fe176>] ? kprobe_exceptions_notify+0x16/0x450
+ [<ffffffff814fcc59>] ? perf_event_nmi_handler+0x39/0xb0
+ [<ffffffff814fe7c5>] ? notifier_call_chain+0x55/0x80
+ [<ffffffff814fe82a>] ? atomic_notifier_call_chain+0x1a/0x20
+ [<ffffffff81097dce>] ? notify_die+0x2e/0x30
+ [<ffffffff814fc3e3>] ? do_nmi+0x173/0x2c0
+ [<ffffffff814fbcf0>] ? nmi+0x20/0x30
+ [<ffffffff814fb44f>] ? _spin_lock_irqsave+0x2f/0x40
+ <<EOE>>  [<ffffffff81051c62>] ? __wake_up+0x32/0x70
+ [<ffffffff8112f47e>] ? wakeup_kswapd+0xce/0x130
+ [<ffffffff81129beb>] ? __alloc_pages_nodemask+0x70b/0x990
+ [<ffffffff8115ee1a>] ? alloc_pages_current+0xaa/0x110
+ [<ffffffff8142bad3>] ? skb_append_datato_frags+0x73/0x1b0
+ [<ffffffff81470720>] ? ip_generic_getfrag+0x0/0xb0
+ [<ffffffff81470720>] ? ip_generic_getfrag+0x0/0xb0
+ [<ffffffff81472726>] ? __ip_append_data+0x506/0xa80
+ [<ffffffff81470720>] ? ip_generic_getfrag+0x0/0xb0
+ [<ffffffff81470720>] ? ip_generic_getfrag+0x0/0xb0
+
+2， 分析vmcore:
+
+9711一直在关中断后等待 &q->lock 而导致看门狗判断为hardlock而复位
+PID: 9711
+......
+--- <NMI exception stack> ---
+#12 [ffff88096a6216e8] _spin_lock_irq at ffffffff814fb44f
+#13 [ffff88096a6216f0] __wake_up at ffffffff81051c62
+#14 [ffff88096a621730] wakeup_kswapd at ffffffff8112f47e
+#15 [ffff88096a621770] __alloc_pages_nodemask at ffffffff81129be
+
+
+void __wake_up(wait_queue_head_t *q, unsigned int mode,
+			int nr_exclusive, void *key)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&q->lock, flags);
+	__wake_up_common(q, mode, nr_exclusive, 0, key);
+	spin_unlock_irqrestore(&q->lock, flags);
+}
+
+原因是9716线程在获取到&q->lock后，继续获取下面的task_rq_lock 时堵塞了：
+
+PID: 9716
+......
+
+ #5 [ffff880b96e7d668] _write_lock at ffffffff814fb55e
+ #6 [ffff880b96e7d670] task_rq_lock at ffffffff81051eed
+ #7 [ffff880b96e7d6a0] try_to_wake_up at ffffffff8105f0dc
+ #8 [ffff880b96e7d710] default_wake_function at ffffffff8105f4b2
+ #9 [ffff880b96e7d720] autoremove_wake_function at ffffffff81091c86
+#10 [ffff880b96e7d740] __wake_up_common at ffffffff8104cd59
+#11 [ffff880b96e7d790] __wake_up at ffffffff81051c78
+#12 [ffff880b96e7d7d0] wakeup_kswapd at ffffffff8112f47
+
+
+9716进程获取了node0 上swap的wait_queue_head->spinlock，堵塞在等待cpu 11 上的rq->lock：
+void __wake_up(wait_queue_head_t *q, unsigned int mode,
+			int nr_exclusive, void *key)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&q->lock, flags);
+	__wake_up_common(q, mode, nr_exclusive, 0, key);   ------》堵塞在这里
+	spin_unlock_irqrestore(&q->lock, flags);
+}
+
+
+8796进程获取了cpu 11 上的rq->lock, 堵塞在等待 node0 上swap的wait_queue_head->spinlock
+static inline void post_schedule(struct rq *rq)
+{
+	if (rq->post_schedule) {
+		unsigned long flags;
+
+		spin_lock_irqsave(&rq->lock, flags);
+		if (rq->curr->sched_class->post_schedule)
+			rq->curr->sched_class->post_schedule(rq);---->堵塞在这里
+		spin_unlock_irqrestore(&rq->lock, flags);
+
+		rq->post_schedule = 0;
+	}
+}
+
+最后，发现在实时进程调度的代码中又调用了分配内存的函数，这样在内存紧张的情况下，就可能出现死锁：
+ #5 [ffff880ad9ff5448] _spin_lock_irq at ffffffff814fb44f
+ #6 [ffff880ad9ff5450] __wake_up at ffffffff81051c62
+ #7 [ffff880ad9ff5490] wakeup_kswapd at ffffffff8112f47e
+ #8 [ffff880ad9ff54d0] __alloc_pages_nodemask at ffffffff81129beb
+ #9 [ffff880ad9ff55f0] kmem_getpages at ffffffff811646a2
+#10 [ffff880ad9ff5620] fallback_alloc at ffffffff8116524e
+#11 [ffff880ad9ff5690] ____cache_alloc_node at ffffffff81164f59
+#12 [ffff880ad9ff56f0] kmem_cache_alloc_node_notrace at ffffffff81165eaf
+#13 [ffff880ad9ff5730] alloc_cpumask_var_node at ffffffff81274154
+#14 [ffff880ad9ff5780] alloc_cpumask_var at ffffffff81274221   -----》在schedule中调用alloc_cpumask_var，引起了死锁
+#15 [ffff880ad9ff5790] find_lowest_rq at ffffffff81052068
+#16 [ffff880ad9ff57e0] push_rt_task at ffffffff8105e74a
+#17 [ffff880ad9ff5830] post_schedule_rt at ffffffff8105ea30
+#18 [ffff880ad9ff5850] thread_return at ffffffff814f8ce4
+#19 [ffff880ad9ff5910] schedule_hrtimeout_range at ffffffff814fa5a8
+#20 [ffff880ad9ff59b0] poll_schedule_timeout at ffffffff81191a89
+#21 [ffff880ad9ff59d0] do_select at ffffffff811920f8
+#22 [ffff880ad9ff5d70] core_sys_select at ffffffff81192d1a
+#23 [ffff880ad9ff5f10] sys_select at ffffffff811930a7
+#24 [ffff880ad9ff5f80] system_call_fastpath at ffffffff8100b0f2
+
+
+
+本质上，该问题源于在schedule的过程中分配内存导致。
+（此时如果内存紧张，需要唤醒kswapd，需要拿锁，而此时有其它相关的进程刚好也在类似的流程中拿到了这把锁，导致死锁。）
+
+分析代码，应该下面的补丁解决了这个问题：
+https://git.kernel.org/cgit/linux/kernel/git/stable/linux-stable.git/commit/kernel/sched_rt.c?id=e2c880630438f80b474378d5487b511b07665051
+虽然补丁的原意只是为了让代码更简洁，
+但是正是由于其消除了一个中间变量(cpu_mask)，从而避免了在schedule的过程中去分配内存，进而消除了这个问题。
