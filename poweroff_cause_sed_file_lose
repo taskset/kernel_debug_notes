@@ -1,0 +1,23 @@
+现象：
+sed命令执行过程中，虚拟机下电，文件丢失
+
+分析：
+跟踪sed的相关系统调用：
+# strace sed -i 's#%ZHOME%#'"$ZHOME"'#g' ./nginx_vhost/portal_server.conf
+...
+open("./nginx_vhost/portal_server.conf", O_RDONLY) = 3
+...
+open("./nginx_vhost/sedcfIlhU", O_RDWR|O_CREAT|O_EXCL, 0600) = 4
+...
+read(3, "", 4096)                       = 0
+fchown(4, 0, 0)                         = 0
+fchmod(4, 0100644)                      = 0
+close(3)                                = 0
+munmap(0x7f0d9ecfb000, 4096)            = 0
+close(4)                                = 0
+rename("./nginx_vhost/sedcfIlhU", "./nginx_vhost/portal_server.conf") = 0
+
+看代码和strace，sed会创建一个临时文件，把结果写到临时文件，最后再把临时文件rename 为 结果文件。
+
+rename的过程中，如果虚拟机掉电，可能会出现结果文件丢失的现象；
+另外，文件是先写到内存，再写入硬盘的，虽然rename成功了，但是还可能没有刷入硬盘，这时候虚拟机掉电，会出现文件内容为空的现象。
