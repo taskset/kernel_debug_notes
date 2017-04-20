@@ -1,0 +1,226 @@
+故障现象：
+Tasks: 1759 total,   4 running, 1755 sleeping,   0 stopped,   0 zombie
+系统进程达到1700多以上，sys占用很高。
+
+分析：
+统计进程名称，发现大部分（1000以上）都是kworker。
+
+收集数据：
+echo 1 > /sys/kernel/debug/tracing/events/workqueue/workqueue_queue_work/enable
+cat trace > /tmp/wq.log
+echo 0 > /sys/kernel/debug/tracing/events/workqueue/workqueue_queue_work/enable
+
+分析数据，
+#!/bin/bash
+
+if [[ $# -lt 1 ]]
+then
+    echo "Usage: $0 <filename>"
+    exit 1
+fi
+file=$1
+declare -A count
+
+cat $file | grep "function="  | awk '{print $8}' | awk  -F '='  '{print $2}'  > .tmp.$file
+
+for word in $(grep -P -o '\b\w+\b' .tmp.$file)
+do
+    let count[$word]++
+done
+for word in ${!count[@]}
+do
+    printf "%-14s%s\n" $word  " --->" ${count[$word]}
+done
+
+
+# ./count.sh  /tmp/wq.log
+...
+disk_events_workfn --->
+42023 
+大部分都是在执行disk_events_workfn。
+
+添加调试脚本，在创建kworker的时候触发panic：
+probe kernel.function("create_worker")
+{
+	print("\n");
+	printf(">>> pid[%d] pid_name[%s] \n", pid(), pid2execname(pid()));
+	workers = @cast($pool, "worker_pool", "kernel")->nr_workers;
+	idles = @cast($pool, "worker_pool", "kernel")->nr_idle;
+	printf("nr_workers [%d], nr_idle[%d]\n", workers, idles);
+
+	print_backtrace();
+	if(workers > 20){
+		printf("workers > 20 !");
+		panic("just a test")
+	}
+	print("\n");
+}
+
+这样收集了一个vmcore分析，发现cpu12 上 47个kworker线程，每一个线程都执行的是disk_events_workfn，并且都进入了睡眠状态；
+它们的堆栈都类似：
+crash＞ bt 1124
+PID: 1124   TASK: ffff883d9b0a5c00  CPU: 12  COMMAND: "kworker/12:34"
+ #0 [ffff883d7da93a00] __schedule at ffffffff8163be85
+ #1 [ffff883d7da93a68] schedule at ffffffff8163c509
+ #2 [ffff883d7da93a78] schedule_timeout at ffffffff8163a165
+ #3 [ffff883d7da93b20] io_schedule_timeout at ffffffff8163bb4e
+ #4 [ffff883d7da93b50] wait_for_completion_io_timeout at ffffffff8163ca56
+ #5 [ffff883d7da93bb0] blk_execute_rq at ffffffff812d135b
+ #6 [ffff883d7da93c68] scsi_execute at ffffffff8141ecc3
+ #7 [ffff883d7da93ca8] scsi_execute_req_flags at ffffffff814205fe
+ #8 [ffff883d7da93d10] scsi_test_unit_ready at ffffffff81420c78
+ #9 [ffff883d7da93d80] sd_check_events at ffffffffa00ff55e [sd_mod]
+#10 [ffff883d7da93da8] disk_check_events at ffffffff812dbaab
+#11 [ffff883d7da93e10] disk_events_workfn at ffffffff812dbc16
+#12 [ffff883d7da93e20] process_one_work at ffffffff8109d759
+#13 [ffff883d7da93e68] worker_thread at ffffffff8109e5db
+#14 [ffff883d7da93ec8] kthread at ffffffff810a5d1f
+#15 [ffff883d7da93f50] ret_from_fork at ffffffff81647558
+
+由于线程池的线程都睡眠了，再来一些disk_events任务，所以会创建一个新的kworker来处理任务。
+
+分析采集到的数据，分析disk_events_workfn的相关代码，发现如下两个补丁可能会和kworker增多有关：
+https://github.com/lnykryn/systemd-rhel/commit/c5a41da94916815ac14d950a0547bffc4411f7af
+http://git.kernel.org/cgit/linux/kernel/git/stable/linux-stable.git/commit/?id=85ef06d1d252f6a2e73b678591ab71caad4667bb
+
+这个补丁在centos7.2（3.10.0-327.22.2） 中合入了，所以高版本内核暴露这个问题，而低版本内核没有暴露。
+修改上述补丁的代码，临时做个开关，不要发送disk_events事件：
+diff --git a/block/genhd.c b/block/genhd.c
+index 8277ee8..5ce678f 100644
+--- a/block/genhd.c
++++ b/block/genhd.c
+@@ -1470,6 +1470,8 @@ void disk_block_events(struct gendisk *disk)
+ 	mutex_unlock(&ev->block_mutex);
+ }
+ 
++int dis_disk_events = 0;
++
+ static void __disk_unblock_events(struct gendisk *disk, bool check_now)
+ {
+ 	struct disk_events *ev = disk->ev;
+@@ -1484,6 +1486,8 @@ static void __disk_unblock_events(struct gendisk *disk, bool check_now)
+ 	if (--ev->block)
+ 		goto out_unlock;
+ 
++	if(dis_disk_events)
++		goto out_unlock;
+ 	/*
+ 	 * Not exactly a latency critical operation, set poll timer
+ 	 * slack to 25% and kick event check.
+@@ -1533,6 +1537,9 @@ void disk_flush_events(struct gendisk *disk, unsigned int mask)
+ 	if (!ev)
+ 		return;
+ 
++	if(dis_disk_events)
++		return;
++
+ 	spin_lock_irq(&ev->lock);
+ 	ev->clearing |= mask;
+ 	if (!ev->block)
+@@ -1540,6 +1547,7 @@ void disk_flush_events(struct gendisk *disk, unsigned int mask)
+ 	spin_unlock_irq(&ev->lock);
+ }
+ 
++
+ /**
+  * disk_clear_events - synchronously check, clear and return pending events
+  * @disk: disk to fetch and clear events from
+@@ -1583,7 +1591,10 @@ unsigned int disk_clear_events(struct gendisk *disk, unsigned int mask)
+ 	 * if ev->clearing is not 0, the disk_flush_events got called in the
+ 	 * middle of this function, so we want to run the workfn without delay.
+ 	 */
++	if(!dis_disk_events)
+ 	__disk_unblock_events(disk, ev->clearing ? true : false);
++	else
++		__disk_unblock_events(disk, false);
+ 
+ 	/* then, fetch and clear pending events */
+ 	spin_lock_irq(&ev->lock);
+diff --git a/kernel/sysctl.c b/kernel/sysctl.c
+index a9901c3..e82da47 100644
+--- a/kernel/sysctl.c
++++ b/kernel/sysctl.c
+@@ -271,6 +271,8 @@ static int min_extfrag_threshold;
+ static int max_extfrag_threshold = 1000;
+ #endif
+ 
++extern int dis_disk_events;
++
+ static struct ctl_table kern_table[] = {
+ 	{
+ 		.procname	= "sched_child_runs_first",
+@@ -1120,6 +1123,13 @@ static struct ctl_table kern_table[] = {
+ 		.extra1		= &zero,
+ 		.extra2		= &one,
+ 	},
++	{
++		.procname	= "disable_disk_events",
++		.data		= &dis_disk_events,
++		.maxlen		= sizeof(unsigned long),
++		.mode		= 0644,
++		.proc_handler	= proc_doulongvec_minmax,
++	},
+ 	{ }
+ };
+
+进行对比测试，发现性能有很大提高，sys和si都有提升。
+问题确认了，现在回退上面的测试补丁，继续分析代码：
+在打开/关闭块设备的时候（__blkdev_get、blkdev_put），会发送disk_events事件，让内核检测磁盘是否在位。
+这样的流程： 如果频繁打开关闭块设备设备---》频发发送disk_events事件 ---》 kworker工作队列线程增多、scsi软中断处理增多
+会表现为sys和si冲高。
+
+用systemtap抓取堆栈，主要是在XXX用户程序在频繁打开块设备：
+＞＞＞ pid[10256] pid_name[_KLINUX_DFS_FAC] 
+ 0xffffffff812db690 : __disk_unblock_events+0x0/0x120 [kernel]
+ 0xffffffff812dc95a : disk_unblock_events+0x1a/0x20 [kernel]
+ 0xffffffff8121b4f1 : __blkdev_get+0x221/0x4d0 [kernel]
+ 0xffffffff8121b975 : blkdev_get+0x1d5/0x360 [kernel]
+ 0xffffffff8121bbab : blkdev_open+0x5b/0x80 [kernel]
+ 0xffffffff811dcf87 : do_dentry_open+0x1a7/0x2e0 [kernel]
+ 0xffffffff811dd1b9 : vfs_open+0x39/0x70 [kernel]
+ 0xffffffff811ec80d : do_last+0x1ed/0x1270 [kernel]
+ 0xffffffff811ef572 : path_openat+0xc2/0x490 [kernel]
+ 0xffffffff811f0d3b : do_filp_open+0x4b/0xb0 [kernel]
+ 0xffffffff811de683 : do_sys_open+0xf3/0x1f0 [kernel]
+ 0xffffffff811de79e : sys_open+0x1e/0x20 [kernel]
+ 0xffffffff81647852 : int_careful+0xe/0x22 [kernel]
+ 0x7fda06a9b9cd : __open_nocancel+0x24/0x57 [/usr/lib64/libpthread-2.17.so]
+ 0x522ac0 [...xxxxx.XXX+0x122ac0/0x419000]
+
+以及频繁关闭块设备：
+＞＞＞ pid[10256] pid_name[_KLINUX_DFS_FAC] 
+ 0xffffffff8121bbd0 : blkdev_put+0x0/0x140 [kernel]
+ 0xffffffff8121bdc5 : blkdev_close+0x25/0x30 [kernel]
+ 0xffffffff811e11c9 : __fput+0xe9/0x270 [kernel]
+ 0xffffffff811e149e : ____fput+0xe/0x10 [kernel]
+ 0xffffffff810a2507 : task_work_run+0xa7/0xe0 [kernel]
+ 0xffffffff81014b72 : do_notify_resume+0x92/0xb0 [kernel]
+ 0xffffffff816478fd : stub_clone+0xd/0x90 [kernel]
+ 0x7fda06a9b28d : __close_nocancel+0x24/0x57 [/usr/lib64/libpthread-2.17.so]
+ 0x522c46 [...xxxx.XXX+0x122c46/0x419000]
+
+修改用户程序，不要频繁打开、关闭块设备。
+另外，还检测到某个进程也在周期性地以可写（O_WRONLY/O_RDWR）的方式open 系统盘，再close。
+这时候根据udev规则：
+# watch metadata changes by tools closing the device after writing
+KERNEL!="sr*", OPTIONS+="watch"
+
+systemd-udev监控到“closing the device after writing”，会主动往sda的uevent写入change，触发一次系统盘属性改变。
+继续用systemtap脚本跟踪。
+这个进程也抓取到了：
+ >>> pid[20478] pid_name[xxxxx]
+>>> path[/dev/sda], name[sda], mode[31]
+ 0xffffffff812872a0 : security_file_open+0x0/0x70 [kernel]
+ 0xffffffff811dce9e : do_dentry_open+0xbe/0x2e0 [kernel]
+ 0xffffffff811dd1b9 : vfs_open+0x39/0x70 [kernel]
+ 0xffffffff811ec80d : do_last+0x1ed/0x1270 [kernel]
+ 0xffffffff811ef572 : path_openat+0xc2/0x490 [kernel]
+ 0xffffffff811f0d3b : do_filp_open+0x4b/0xb0 [kernel]
+ 0xffffffff811de683 : do_sys_open+0xf3/0x1f0 [kernel]
+ 0xffffffff811de79e : sys_open+0x1e/0x20 [kernel]
+ 0xffffffff81647852 : tracesys+0xdd/0xe2 [kernel]
+ 0x7f586b10a9cd [/usr/lib64/libpthread-2.17.so+0xe9cd/0x218000]
+ 继续修改，去掉周期性open块设备。
+ 
+ 上面两个地方修改之后，性能得到提升。
+ 
