@@ -367,7 +367,7 @@ include/linux/spinlock_api_up.h
 #define __LOCK(lock) \
   do { preempt_disable(); __acquire(lock); (void)(lock); } while (0)
 
-单核中，spin_lock不起作用（仅仅是关闭内核抢占，而cgsl系统中，默认没有打开内核抢占的：# CONFIG_PREEMPT is not set）。
+单核中，spin_lock不起作用（仅仅是关闭内核抢占，而服务器操作系统中，默认没有打开内核抢占的：# CONFIG_PREEMPT is not set）。
 
 --》使用spinlock_api_up.h还是spinlock_api_smp.h文件，好像是编译时决定的:                   
 #if defined(CONFIG_SMP) || defined(CONFIG_DEBUG_SPINLOCK)
