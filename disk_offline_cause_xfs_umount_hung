@@ -1,0 +1,346 @@
+故障现象：
+sync命令一直挂住
+PID: 11939  TASK: ffff8831c41b4500  CPU: 4   COMMAND: "sync"
+#0 [ffff883e22fe7de8] __schedule at ffffffff8163c8ed
+#1 [ffff883e22fe7e50] schedule at ffffffff8163cf89
+#2 [ffff883e22fe7e60] rwsem_down_read_failed at ffffffff8163e945
+#3 [ffff883e22fe7ec8] call_rwsem_down_read_failed at ffffffff813036c4
+#4 [ffff883e22fe7f28] iterate_supers at ffffffff811e2e2c
+#5 [ffff883e22fe7f60] sys_sync at ffffffff81210a94
+#6 [ffff883e22fe7f80] system_call_fastpath at ffffffff81648009
+
+问题分析：
+
+crash> dis -l  ffffffff811e2e2c
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.0321.x86_64/fs/super.c: 471
+0xffffffff811e2e2c <iterate_supers+156>:        cmpq   $0x0,0x60(%rbx)
+
+
+ 459 void iterate_supers(void (*f)(struct super_block *, void *), void *arg)
+ 460 {
+ 461     struct super_block *sb, *p = NULL;
+ 462 
+ 463     spin_lock(&sb_lock);
+ 464     list_for_each_entry(sb, &super_blocks, s_list) {
+ 465         if (hlist_unhashed(&sb->s_instances))
+ 466             continue;
+ 467         sb->s_count++;
+ 468         spin_unlock(&sb_lock);
+ 469 
+ 470         down_read(&sb->s_umount);
+ 471         if (sb->s_root && (sb->s_flags & MS_BORN))
+ 472             f(sb, arg);
+ 473         up_read(&sb->s_umount);
+ 474 
+ 475         spin_lock(&sb_lock);
+ 476         if (p)
+ 477             __put_super(p);
+ 478         p = sb;
+ 479     }
+ 480     if (p)
+ 481         __put_super(p);
+ 482     spin_unlock(&sb_lock);
+ 483 }
+
+crash> dis -l iterate_supers
+......
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.0321.x86_64/fs/super.c: 467
+0xffffffff811e2e0d <iterate_supers+125>:        addl   $0x1,0x88(%rbx)
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.0321.x86_64/fs/super.c: 470
+0xffffffff811e2e14 <iterate_supers+132>:        lea    0x68(%rbx),%r13
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.0321.x86_64/include/linux/spinlock.h: 333
+0xffffffff811e2e18 <iterate_supers+136>:        mov    $0xffffffff81eed020,%rdi
+0xffffffff811e2e1f <iterate_supers+143>:        callq  0xffffffff8163f130 <_raw_spin_unlock>
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.0321.x86_64/fs/super.c: 470
+0xffffffff811e2e24 <iterate_supers+148>:        mov    %r13,%rdi
+0xffffffff811e2e27 <iterate_supers+151>:        callq  0xffffffff8163c180 <down_read>
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.0321.x86_64/fs/super.c: 471
+0xffffffff811e2e2c <iterate_supers+156>:        cmpq   $0x0,0x60(%rbx)
+0xffffffff811e2e31 <iterate_supers+161>:        je     0xffffffff811e2dd0 <iterate_supers+64>
+0xffffffff811e2e33 <iterate_supers+163>:        testb  $0x20,0x53(%rbx)
+0xffffffff811e2e37 <iterate_supers+167>:        je     0xffffffff811e2dd0 <iterate_supers+64>
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.0321.x86_64/fs/super.c: 472
+......
+
+rbx 为super_block,r13 为0x68(%rbx) 就是sb.s_umount。
+所以down_read 的 rdi 是sb->s_umount。
+
+crash> dis down_read
+0xffffffff8163c180 <down_read>: nopl   0x0(%rax,%rax,1) [FTRACE NOP]
+0xffffffff8163c185 <down_read+5>:       push   %rbp
+0xffffffff8163c186 <down_read+6>:       mov    %rsp,%rbp
+0xffffffff8163c189 <down_read+9>:       push   %rbx
+0xffffffff8163c18a <down_read+10>:      mov    %rdi,%rbx
+0xffffffff8163c18d <down_read+13>:      callq  0xffffffff8163d1f0 <_cond_resched>
+0xffffffff8163c192 <down_read+18>:      mov    %rbx,%rax
+0xffffffff8163c195 <down_read+21>:      lock incq (%rax)
+0xffffffff8163c199 <down_read+25>:      jns    0xffffffff8163c1a0 <down_read+32>
+0xffffffff8163c19b <down_read+27>:      callq  0xffffffff813036b0 <call_rwsem_down_read_failed>
+0xffffffff8163c1a0 <down_read+32>:      pop    %rbx
+0xffffffff8163c1a1 <down_read+33>:      pop    %rbp
+0xffffffff8163c1a2 <down_read+34>:      retq   
+0xffffffff8163c1a3 <down_read+35>:      data32 data32 data32 nopw %cs:0x0(%rax,%rax,1
+
+
+crash> dis -l call_rwsem_down_read_failed
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.0321.x86_64/arch/x86/lib/rwsem.S: 89
+0xffffffff813036b0 <call_rwsem_down_read_failed>:       push   %rdi
+0xffffffff813036b1 <call_rwsem_down_read_failed+1>:     push   %rsi
+0xffffffff813036b2 <call_rwsem_down_read_failed+2>:     push   %rcx
+0xffffffff813036b3 <call_rwsem_down_read_failed+3>:     push   %r8
+0xffffffff813036b5 <call_rwsem_down_read_failed+5>:     push   %r9
+0xffffffff813036b7 <call_rwsem_down_read_failed+7>:     push   %r10
+0xffffffff813036b9 <call_rwsem_down_read_failed+9>:     push   %r11
+
+---》rbx、rdi都存放到call_rwsem_down_read_failed 的堆栈中了。
+
+
+crash> bt -f 11939
+PID: 11939  TASK: ffff8831c41b4500  CPU: 4   COMMAND: "sync"
+ ......
+ #2 [ffff883e22fe7e60] rwsem_down_read_failed at ffffffff8163e945
+    ffff883e22fe7e68: 0000000000000000 ffff880105038878 
+    ffff883e22fe7e78: ffff880105038878 ffff8831c41b4500 
+    ffff883e22fe7e88: ffffffff00000001 ffff883e22fe7e90 
+    ffff883e22fe7e98: 000000006b241ed1 ffff880105038868 
+    ffff883e22fe7ea8: ffff8836cac37000 ffff880105038868 
+    ffff883e22fe7eb8: 0000000000000000 ffff883e22fe7f20 
+    ffff883e22fe7ec8: ffffffff813036c4 
+ #3 [ffff883e22fe7ec8] call_rwsem_down_read_failed at ffffffff813036c4
+    ffff883e22fe7ed0: 0000000000000000 0000000000000001 
+    ffff883e22fe7ee0: 0000000000000100 0000000000000000 
+    ffff883e22fe7ef0: ffff883e22fe7dc0 ffff883e22fe7fd8 
+    ffff883e22fe7f00: ffff881f96808ac0 ffff880105038868 
+    ffff883e22fe7f10: ffffffff8163c1a0 ffff880105038800 
+    ffff883e22fe7f20: ffff883e22fe7f58 ffffffff811e2e2c 
+ #4 [ffff883e22fe7f28] iterate_supers at ffffffff811e2e2c
+
+---->找到rbx为ffff880105038800，  rdi为 ffff880105038868 ，从而super_blocks.s_umount 为 ffff880105038868
+ 
+crash> struct -xo super_block
+struct super_block {
+    [0x0] struct list_head s_list;
+   [0x10] dev_t s_dev;
+   [0x14] unsigned char s_blocksize_bits;
+   [0x18] unsigned long s_blocksize;
+   [0x20] loff_t s_maxbytes;
+   [0x28] struct file_system_type *s_type;
+   [0x30] const struct super_operations *s_op;
+   [0x38] const struct dquot_operations *dq_op;
+   [0x40] const struct quotactl_ops *s_qcop;
+   [0x48] const struct export_operations *s_export_op;
+   [0x50] unsigned long s_flags;
+   [0x58] unsigned long s_magic;
+   [0x60] struct dentry *s_root;
+   [0x68] struct rw_semaphore s_umount;
+   [0x88] int s_count;
+   [0x8c] atomic_t s_active;
+......
+
+crash> struct super_block  -l 0x68  ffff880105038868
+...
+  s_id = "sdbe\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000", 
+  s_uuid = "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000", 
+...
+
+================
+另外一种方法，通过super_blocks 链表，发现 ffff880105038800 也属于super_block:
+   
+crash> p super_blocks
+super_blocks = $2 = {
+  next = 0xffff881ff3530000, 
+  prev = 0xffff883a4e28d800
+}
+
+ 
+crash> list  -s super_block.s_umount  -H  0xffff881ff3530000
+...
+ffff880105038800
+  s_umount = {
+    count = -8589934591, 
+    wait_lock = {
+      raw_lock = {
+        {
+          head_tail = 131074, 
+          tickets = {
+            head = 2, 
+            tail = 2
+          }
+        }
+      }
+    }, 
+    wait_list = {
+      next = 0xffff883e22fe7e70, 
+      prev = 0xffff883e22fe7e70
+    }
+  }
+...
+
+看上去 super_block.s_umount 的内存被破坏了。
+
+==================================
+
+dev -d 检查，发现sdbe 已经不存在了。
+log 检查，发现频繁报错：
+[2139065.527374] XFS (sdbe): metadata I/O error: block 0xaea86698 ("xfs_buf_iodone_callbacks") error 19 numblks 8
+[2139065.571395] XFS (sdbi): metadata I/O error: block 0x74704468 ("xfs_buf_iodone_callbacks") error 19 numblks 8
+[2139065.577400] XFS (sdbe): metadata I/O error: block 0xaea86698 ("xfs_buf_iodone_callbacks") error 19 numblks 8
+[2139065.621418] XFS (sdbi): metadata I/O error: block 0x74704468 ("xfs_buf_iodone_callbacks") error 19 numblks 8
+
+#define	ENODEV		19	/* No such device */
+19表示设备不存在。
+
+应该是sdbe盘被拔出了。
+
+
+foreach bt -f， 继续检查ffff880105038800，发现有其他进程在执行umout，也在操作这个super_block:
+
+PID: 23030  TASK: ffff881fd97c5c00  CPU: 23  COMMAND: "umount"
+ #0 [ffff881f0b05bd20] __schedule at ffffffff8163c8ed
+    ffff881f0b05bd28: 0000000000000082 ffff881fd97c5c00
+    ffff881f0b05bd38: ffff881f0b05bfd8 ffff881f0b05bfd8
+    ffff881f0b05bd48: ffff881f0b05bfd8 ffff881fd97c5c00
+    ffff881f0b05bd58: ffff880d051c4880 ffff880df3a130a0
+    ffff881f0b05bd68: ffff880d051c48c0 ffff880d051c48e8
+    ffff881f0b05bd78: ffff880d051c4890 ffff881f0b05bd90
+    ffff881f0b05bd88: ffffffff8163cf89
+ #1 [ffff881f0b05bd88] schedule at ffffffff8163cf89
+    ffff881f0b05bd90: ffff881f0b05bdf8 ffffffffa0208cd1
+ #2 [ffff881f0b05bd98] xfs_ail_push_all_sync at ffffffffa0208cd1 [xfs]
+    ffff881f0b05bda0: 0000000000000000 ffff881fd97c5c00
+    ffff881f0b05bdb0: ffffffff810a7250 ffff880d051c48f0
+    ffff881f0b05bdc0: ffff880d051c48f0 00000000c21b34a4
+    ffff881f0b05bdd0: ffff88010503d000 ffff88010503d000
+    ffff881f0b05bde0: ffff881f09c69100 00007eff792cd210
+    ffff881f0b05bdf0: ffff880138aebc40 ffff881f0b05be30
+    ffff881f0b05be00: ffffffffa01f3b98
+ #3 [ffff881f0b05be00] xfs_unmountfs at ffffffffa01f3b98 [xfs]
+    ffff881f0b05be08: ffffffffa01f467b 00000000c21b34a4
+    ffff881f0b05be18: ffff88010503d000 ffff8801050388a0
+    ffff881f0b05be28: ffffffffa021d9a0 ffff881f0b05be48
+    ffff881f0b05be38: ffffffffa01f6a52
+ #4 [ffff881f0b05be38] xfs_fs_put_super at ffffffffa01f6a52 [xfs]
+    ffff881f0b05be40: ffff880105038800 ffff881f0b05be70
+    ffff881f0b05be50: ffffffff811e1826
+ #5 [ffff881f0b05be50] generic_shutdown_super at ffffffff811e1826
+    ffff881f0b05be58: ffff881fe68f8340 0000000000000083
+    ffff881f0b05be68: ffff880138aebc20 ffff881f0b05be90
+    ffff881f0b05be78: ffffffff811e1c77
+ #6 [ffff881f0b05be78] kill_block_super at ffffffff811e1c77
+    ffff881f0b05be80: ffff880105038800 ffffffffa023b4a0
+    ffff881f0b05be90: ffff881f0b05beb0 ffffffff811e1fb9
+ #7 [ffff881f0b05be98] deactivate_locked_super at ffffffff811e1fb9
+    ffff881f0b05bea0: ffff880105038800 ffff880105038800
+    ffff881f0b05beb0: ffff881f0b05bec8 ffffffff811e25b6
+ #8 [ffff881f0b05beb8] deactivate_super at ffffffff811e25b6
+    ffff881f0b05bec0: ffff880138aebc00 ffff881f0b05bef0
+    ffff881f0b05bed0: ffffffff811ff525
+ #9 [ffff881f0b05bed0] mntput_no_expire at ffffffff811ff525
+    ffff881f0b05bed8: 0000000000000000 ffff880138aebc00
+    ffff881f0b05bee8: 0000000000000000 ffff881f0b05bf78
+    ffff881f0b05bef8: ffffffff81200dcb
+#10 [ffff881f0b05bef8] sys_umount at ffffffff81200dcb
+    ffff881f0b05bf00: ffff880138aebc40 ffff881f00000000
+    ffff881f0b05bf10: ffff880138aebc20 ffff880138aebc00
+    ffff881f0b05bf20: ffff8820b2bedf00 ffff880138aebc20
+    ffff881f0b05bf30: ffff88377af0f740 ffff881f0b05bf38
+    ffff881f0b05bf40: ffff881f0b05bf38 00000000c21b34a4
+    ffff881f0b05bf50: 00007eff792cd040 00007eff7763dd38
+    ffff881f0b05bf60: 0000000000000000 00007eff792cd210
+    ffff881f0b05bf70: 00007eff792cd040 00007eff792dd5e0
+    ffff881f0b05bf80: ffffffff81648009
+#11 [ffff881f0b05bf80] system_call_fastpath at ffffffff81648009
+
+
+分析代码，发现在#8 deactivate_super 时，会先获取写锁：
+void deactivate_super(struct super_block *s)
+{
+        if (!atomic_add_unless(&s->s_active, -1, 1)) {
+		down_write(&s->s_umount);
+		deactivate_locked_super(s);
+	}
+}
+
+void deactivate_locked_super(struct super_block *s)
+{
+	struct file_system_type *fs = s->s_type;
+	if (atomic_dec_and_test(&s->s_active)) {
+		cleancache_invalidate_fs(s);
+		fs->kill_sb(s);
+
+		/* caches are now gone, we can safely kill the shrinker now */
+		unregister_shrinker(&s->s_shrink);
+		put_filesystem(fs);
+		put_super(s);
+	} else {
+		up_write(&s->s_umount);
+	}
+}
+
+deactivate_locked_super 函数一直在kill_sb (kill_block_super)中没有返回，导致sync一直获取不到锁而堵塞住。
+
+继续分析 kill_block_super 为什么不返回呢？
+
+一直在xa_empty队列中等待被唤醒：
+/*
+ * Push out all items in the AIL immediately and wait until the AIL is empty.
+ */
+void
+xfs_ail_push_all_sync(
+    struct xfs_ail  *ailp)
+{
+    struct xfs_log_item *lip;
+    DEFINE_WAIT(wait);
+
+    spin_lock(&ailp->xa_lock);
+    while ((lip = xfs_ail_max(ailp)) != NULL) {
+        prepare_to_wait(&ailp->xa_empty, &wait, TASK_UNINTERRUPTIBLE);
+        ailp->xa_target = lip->li_lsn;
+        wake_up_process(ailp->xa_task);
+        spin_unlock(&ailp->xa_lock);
+        schedule();
+        spin_lock(&ailp->xa_lock);
+    }   
+    spin_unlock(&ailp->xa_lock);
+
+    finish_wait(&ailp->xa_empty, &wait);
+}
+
+xa_empty 的唤醒，在
+xfs_trans_ail_delete_bulk 函数：
+		if (list_empty(&ailp->xa_ail))
+			wake_up_all(&ailp->xa_empty);
+			
+xfs_trans_ail_delete_bulk 函数被 xfs_iflush_done 函数调用：
+    	/* xfs_trans_ail_delete_bulk() drops the AIL lock. */
+		xfs_trans_ail_delete_bulk(ailp, log_items, i,
+					  SHUTDOWN_CORRUPT_INCORE);
+
+xfs_iflush_done 函数被IO完成中断回调：
+/*
+ * This is the inode flushing I/O completion routine.  It is called
+ * from interrupt level when the buffer containing the inode is
+ * flushed to disk.  It is responsible for removing the inode item
+ * from the AIL if it has not been re-logged, and unlocking the inode's
+ * flush lock.
+ *
+ * To reduce AIL lock traffic as much as possible, we scan the buffer log item
+ * list for other inodes that will run this function. We remove them from the
+ * buffer list so we can process all the inode IO completions in one AIL lock
+ * traversal.
+ */
+
+当sdbe盘被拔掉后，IO完成中断不会上报，这样xa_empty队列中的等待任务不会被唤醒。
+
+=======
+umount 离线设备，一直挂住的问题，redhat 好像对此bug有讨论：
+Unmounting an RHEL7 XFS filesystem on an offlined drive hangs with the message "metadata I/O error"
+
+https://bugzilla.redhat.com/show_bug.cgi?id=1103792
+
+下一步：
+xfs是怎么修复这个bug的，继续分析
+
+
+
+
