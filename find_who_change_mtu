@@ -1,0 +1,61 @@
+问题现象:
+修改网卡的mtu之后，发现它隔几秒就会被改回去。
+初始值9000：
+[root@localhost ~]# ifconfig  eth0  | grep mtu
+eth0: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 9000
+修改为1500：
+[root@localhost ~]# ifconfig  eth0 mtu 1500
+隔几秒查，发现被改回去了：
+[root@localhost ~]# ifconfig  eth0  | grep mtu
+eth0: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 9000
+
+[61051.331107] i40e 0000:0a:00.3 eth0: changing MTU from 9000 to 1500
+[61054.861079] i40e 0000:0a:00.3 eth0: changing MTU from 1500 to 9000
+
+编写systamtap脚本，找出修改mtu的进程、父进程、祖父进程......等。
+# cat mtu.stp
+probe kernel.function("dev_set_mtu")
+{
+	printf(">>> call stack: \n");
+	print_backtrace();
+
+	pp = task_parent(task_current());
+	printf("%-8d %-16s \n",pid(), execname());
+	printf("<---parent: %-8d %-16s\n", task_pid(pp), task_execname(pp) );
+
+	ppp =  task_parent(pp);
+	printf("<---parent: %-8d %-16s\n", task_pid(ppp), task_execname(ppp) );
+
+	p4 =  task_parent(ppp);
+	printf("<---parent: %-8d %-16s\n", task_pid(p4), task_execname(p4) );
+}
+
+第一次是手工修改mtu：
+>>> call stack:
+ 0xffffffff81528f80 : dev_set_mtu+0x0/0x80 [kernel]
+ 0xffffffff8154334c : dev_ifsioc+0x24c/0x380 [kernel]
+ 0xffffffff81543569 : dev_ioctl+0xe9/0x590 [kernel]
+ 0xffffffff81510755 : sock_do_ioctl+0x45/0x50 [kernel]
+ 0xffffffff81510e60 : sock_ioctl+0x1f0/0x2c0 [kernel]
+ 0xffffffff811f3435 : do_vfs_ioctl+0x2e5/0x4c0 [kernel]
+ 0xffffffff811f36b1 : SyS_ioctl+0xa1/0xc0 [kernel]
+ 0xffffffff81649309 : system_call_fastpath+0x16/0x1b [kernel]
+24280 ifconfig
+<---parent: 31121    bash
+<---parent: 31021    sshd
+<---parent: 4748     sshd
+
+第二次是一个脚本xxxipset.sh做的：
+>>> call stack:
+ 0xffffffff81528f80 : dev_set_mtu+0x0/0x80 [kernel]
+ 0xffffffff8154334c : dev_ifsioc+0x24c/0x380 [kernel]
+ 0xffffffff81543569 : dev_ioctl+0xe9/0x590 [kernel]
+ 0xffffffff81510755 : sock_do_ioctl+0x45/0x50 [kernel]
+ 0xffffffff81510e60 : sock_ioctl+0x1f0/0x2c0 [kernel]
+ 0xffffffff811f3435 : do_vfs_ioctl+0x2e5/0x4c0 [kernel]
+ 0xffffffff811f36b1 : SyS_ioctl+0xa1/0xc0 [kernel]
+ 0xffffffff81649309 : system_call_fastpath+0x16/0x1b [kernel]
+24306 ifconfig
+<---parent: 8656     xxxipset.sh
+<---parent: 1        systemd
+<---parent: 0        swapper/0
