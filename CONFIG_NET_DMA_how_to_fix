@@ -1,0 +1,26 @@
+net_dma 有BUG，在高版本内核中删掉了
+--->
+
+2017-05-26 13:10:05*[文洋10156314]说:
+	https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=7bced397510ab569d31de4c70b39e13355046387
+2017-05-26 13:10:17*[文洋10156314]说:
+commit 7bced397510ab569d31de4c70b39e13355046387
+Author: Dan Williams <dan.j.williams@intel.com>
+Date:   Mon Dec 30 12:37:29 2013 -0800
+
+    net_dma: simple removal
+
+    Per commit "77873803363c net_dma: mark broken" net_dma is no longer used
+    and there is no plan to fix it.
+
+    This is the mechanical removal of bits in CONFIG_NET_DMA ifdef guards.
+    Reverting the remainder of the net_dma induced changes is deferred to
+    subsequent patches.
+
+    Marked for stable due to Roman's report of a memory leak in
+    dma_pin_iovec_pages():
+
+        https://lkml.org/lkml/2014/9/3/177
+        
+        
+----不要直接把它删掉，分析下有没有更好的修复方法？
