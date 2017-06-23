@@ -1,0 +1,312 @@
+有台机器在反复insmod、rmmod之后，出现很多进程僵死，执行ls、ps等命令时可能会卡死，ctrl+c也没反应。
+实时进程都集中在cpu0 和 cpu 12上（见下面）：
+CPU 0 RUNQUEUE: ffff880028216700
+  CURRENT: PID: 0      TASK: ffffffff81a8d020  COMMAND: "swapper"
+  RT PRIO_ARRAY: ffff880028216888
+     [  0] PID: 3      TASK: ffff880626408aa0  COMMAND: "migration/0"
+     [  0] PID: 6      TASK: ffff880626412ae0  COMMAND: "watchdog/0"
+     [  1] PID: 4      TASK: ffff880626408040  COMMAND: "ksoftirqd/0"
+     [ 19] PID: 6536   TASK: ffff88055c764aa0  COMMAND: "BackCommMsgTask"
+     [ 19] PID: 6345   TASK: ffff880b68fbeae0  COMMAND: "_XX_EXC"
+     [ 19] PID: 6225   TASK: ffff880b718da040  COMMAND: "_XX_SER"
+     [ 19] PID: 5893   TASK: ffff880c24b7a040  COMMAND: "_XX_CHA"
+     [ 20] PID: 6227   TASK: ffff88055d2e2040  COMMAND: "ConsoleOutTask"
+     [ 51] PID: 6052   TASK: ffff88055d10caa0  COMMAND: "SCHE4_1"
+     [ 59] PID: 6430   TASK: ffff880b679ceae0  COMMAND: "SCHE53_1"
+     [ 59] PID: 6364   TASK: ffff88055c638aa0  COMMAND: "SCHE44_1"
+     [ 59] PID: 6026   TASK: ffff880b71a0b540  COMMAND: "SCHE70_1"
+     [ 64] PID: 6115   TASK: ffff880b71ad8080  COMMAND: "ussipccreatesen"
+     [ 67] PID: 7554   TASK: ffff88050c97cae0  COMMAND: "_KLINUX_XX_FLR"
+     [ 71] PID: 7572   TASK: ffff88050c8d0040  COMMAND: "_KLINUX_XX_FLR"
+     [ 71] PID: 5478   TASK: ffff88061da83540  COMMAND: "_KLINUX_XX_FLR"
+     [ 71] PID: 5483   TASK: ffff8806228cf500  COMMAND: "_KLINUX_XX_FLR"
+     [ 71] PID: 7597   TASK: ffff8804ffa37540  COMMAND: "_KLINUX_XX_FLR"
+     [ 75] PID: 5954   TASK: ffff88055d54aaa0  COMMAND: "BindCPU_AGENT"
+     [ 75] PID: 6437   TASK: ffff880b679e7500  COMMAND: "BindCPU_AGENT"
+     [ 75] PID: 7333   TASK: ffff88055d0eeaa0  COMMAND: "BindCPU_AGENT"
+     [ 75] PID: 7347   TASK: ffff880b609d3540  COMMAND: "BindCPU_AGENT"
+     [ 75] PID: 7361   TASK: ffff88050c908ae0  COMMAND: "BindCPU_AGENT"
+     [ 78] PID: 5514   TASK: ffff88055d6a3500  COMMAND: "_KLINUX_DFS_FLR"
+  CFS RB_ROOT: ffff880028216798
+     [no tasks queued]
+
+CPU 1 RUNQUEUE: ffff880028256700
+  CURRENT: PID: 0      TASK: ffff88062643c040  COMMAND: "swapper"
+  RT PRIO_ARRAY: ffff880028256888
+     [ 16] PID: 6128   TASK: ffff880b6a154040  COMMAND: "WaitTickTask"
+  CFS RB_ROOT: ffff880028256798
+     [no tasks queued]
+
+CPU 2 RUNQUEUE: ffff880028296700
+  CURRENT: PID: 0      TASK: ffff8806264e8aa0  COMMAND: "swapper"
+  RT PRIO_ARRAY: ffff880028296888
+     [no tasks queued]
+  CFS RB_ROOT: ffff880028296798
+     [no tasks queued]
+
+CPU 3 RUNQUEUE: ffff8800282d6700
+  CURRENT: PID: 0      TASK: ffff880626501500  COMMAND: "swapper"
+  RT PRIO_ARRAY: ffff8800282d6888
+     [no tasks queued]
+  CFS RB_ROOT: ffff8800282d6798
+     [no tasks queued]
+
+CPU 4 RUNQUEUE: ffff880645416700
+  CURRENT: PID: 4513   TASK: ffff880324510aa0  COMMAND: "bash"
+  RT PRIO_ARRAY: ffff880645416888
+     [no tasks queued]
+  CFS RB_ROOT: ffff880645416798
+     [no tasks queued]
+
+CPU 5 RUNQUEUE: ffff880645456700
+  CURRENT: PID: 0      TASK: ffff88062651cae0  COMMAND: "swapper"
+  RT PRIO_ARRAY: ffff880645456888
+     [no tasks queued]
+  CFS RB_ROOT: ffff880645456798
+     [no tasks queued]
+
+CPU 6 RUNQUEUE: ffff880645496700
+  CURRENT: PID: 0      TASK: ffff880626551540  COMMAND: "swapper"
+  RT PRIO_ARRAY: ffff880645496888
+     [no tasks queued]
+  CFS RB_ROOT: ffff880645496798
+     [no tasks queued]
+
+CPU 7 RUNQUEUE: ffff8806454d6700
+  CURRENT: PID: 0      TASK: ffff880626558040  COMMAND: "swapper"
+  RT PRIO_ARRAY: ffff8806454d6888
+     [no tasks queued]
+  CFS RB_ROOT: ffff8806454d6798
+     [no tasks queued]
+
+CPU 8 RUNQUEUE: ffff880028316700
+  CURRENT: PID: 0      TASK: ffff880626570aa0  COMMAND: "swapper"
+  RT PRIO_ARRAY: ffff880028316888
+     [no tasks queued]
+  CFS RB_ROOT: ffff880028316798
+     [no tasks queued]
+
+CPU 9 RUNQUEUE: ffff880028356700
+  CURRENT: PID: 0      TASK: ffff8806265a5500  COMMAND: "swapper"
+  RT PRIO_ARRAY: ffff880028356888
+     [no tasks queued]
+  CFS RB_ROOT: ffff880028356798
+     [no tasks queued]
+
+CPU 10 RUNQUEUE: ffff880028396700
+  CURRENT: PID: 0      TASK: ffff8806265ae080  COMMAND: "swapper"
+  RT PRIO_ARRAY: ffff880028396888
+     [no tasks queued]
+  CFS RB_ROOT: ffff880028396798
+     [no tasks queued]
+
+CPU 11 RUNQUEUE: ffff8800283d6700
+  CURRENT: PID: 0      TASK: ffff8806265c8ae0  COMMAND: "swapper"
+  RT PRIO_ARRAY: ffff8800283d6888
+     [no tasks queued]
+  CFS RB_ROOT: ffff8800283d6798
+     [no tasks queued]
+
+CPU 12 RUNQUEUE: ffff880645516700
+  CURRENT: PID: 0      TASK: ffff8806265fd540  COMMAND: "swapper"
+  RT PRIO_ARRAY: ffff880645516888
+     [  0] PID: 51     TASK: ffff8806265f3500  COMMAND: "migration/12"
+     [  0] PID: 54     TASK: ffff8806265fcae0  COMMAND: "watchdog/12"
+     [  0] PID: 7386   TASK: ffff880c217d0ae0  COMMAND: "ProRecvProc[2]"
+     [  1] PID: 53     TASK: ffff8806265f2040  COMMAND: "ksoftirqd/12"
+     [ 22] PID: 5977   TASK: ffff880622974080  COMMAND: "UshellInTask"
+     [ 22] PID: 5910   TASK: ffff88055d089500  COMMAND: "UshellInTask"
+     [ 22] PID: 6147   TASK: ffff880b6a1f2aa0  COMMAND: "UshellInTask"
+     [ 23] PID: 7616   TASK: ffff8804a5964ae0  COMMAND: "_KLINUX_XX_FLR"
+     [ 29] PID: 7622   TASK: ffff88050b580ae0  COMMAND: "_KLINUX_XX_FLR"
+     [ 40] PID: 5508   TASK: ffff88055d0b3500  COMMAND: "_KLINUX_XX_FLR"
+     [ 44] PID: 5638   TASK: ffff88055d5e1500  COMMAND: "ClockSynTaskEnt"
+     [ 49] PID: 6762   TASK: ffff880b60992aa0  COMMAND: "SM_Check_Backca"
+     [ 49] PID: 8241   TASK: ffff8804ffb99500  COMMAND: "_KLINUX_XX_FAC"
+     [ 51] PID: 6061   TASK: ffff88055d142ae0  COMMAND: "SCHE55_1"
+     [ 51] PID: 7558   TASK: ffff88050c97c080  COMMAND: "_KLINUX_XX_FLR"
+     [ 51] PID: 6056   TASK: ffff88055d114080  COMMAND: "SCHE8_1"
+     [ 51] PID: 6051   TASK: ffff88055d10d500  COMMAND: "SCHE3_1"
+     [ 51] PID: 6060   TASK: ffff88055d143540  COMMAND: "SCHE12_1"
+     [ 63] PID: 6204   TASK: ffff880b71a2c040  COMMAND: "SCHE20_1"
+     [ 73] PID: 5633   TASK: ffff8806249be040  COMMAND: "ASSISTMoniThrea"
+     [ 75] PID: 6399   TASK: ffff88055c6b3540  COMMAND: "BindCPU_AGENT"
+     [ 75] PID: 7345   TASK: ffff880b609d2080  COMMAND: "BindCPU_AGENT"
+  CFS RB_ROOT: ffff880645516798
+     [no tasks queued]
+
+CPU 13 RUNQUEUE: ffff880645556700
+  CURRENT: PID: 0      TASK: ffff880626606040  COMMAND: "swapper"
+  RT PRIO_ARRAY: ffff880645556888
+     [no tasks queued]
+  CFS RB_ROOT: ffff880645556798
+     [no tasks queued]
+
+CPU 14 RUNQUEUE: ffff880645596700
+  CURRENT: PID: 0      TASK: ffff88062661aaa0  COMMAND: "swapper"
+  RT PRIO_ARRAY: ffff880645596888
+     [no tasks queued]
+  CFS RB_ROOT: ffff880645596798
+     [no tasks queued]
+
+CPU 15 RUNQUEUE: ffff8806455d6700
+  CURRENT: PID: 0      TASK: ffff88062662f500  COMMAND: "swapper"
+  RT PRIO_ARRAY: ffff8806455d6888
+     [no tasks queued]
+  CFS RB_ROOT: ffff8806455d6798
+     [no tasks queued]
+	 
+	 
+	 
+分析：
+
+rt_rq[0]:/
+  .rt_nr_running                 : 0
+  .rt_throttled                  : 0
+  .rt_time                       : 19.915137
+  .rt_runtime                    : 800.000000
+
+runnable tasks:
+            task   PID         tree-key  switches  prio     exec-runtime         sum-exec        sum-sleep
+----------------------------------------------------------------------------------------------------------
+
+
+rt_rq[0]:/
+  .rt_nr_running                 : 5
+  .rt_throttled                  : 1
+  .rt_time                       : 4332868.762120
+  .rt_runtime                    : 1000.000000
+
+runnable tasks:
+            task   PID         tree-key  switches  prio     exec-runtime         sum-exec        sum-sleep
+----------------------------------------------------------------------------------------------------------
+    WaitTickTask  6091         9.995122    413948    16         9.995122      6765.428879         0.000000 /
+    WaitTickTask  6190         9.995122    414142    16         9.995122      6983.249698         0.000000 /
+    WaitTickTask  6266         9.995122    414133    16         9.995122      7364.225341         0.000000 /
+ AppShellTaskEnt  6338         9.995122     20746    23         9.995122       381.594330         0.000000 /
+ _KLINUX_DFS_FLR  7224         9.995122   4002797    71         9.995122     43004.525503         0.000000 /
+ 
+ 
+ ======>
+ 
+ https://oss.oracle.com/git/gitweb.cgi?p=redpatch.git;a=commitdiff;h=8839a51512aebd1500a2e9ce20a00901ad806ff6
+
+频繁执行insmod、rmmod驱动的ko，rmmod 传入的是O_NONBLOCK，会走到stop_machine，然后一路走下去，把实时任务的运行时间一下加得很大，
+导致引起实时进程的流控，把rt_throttled设置为1，停止该cpu上实时进程的执行。
+
+
+ --
+rt_rq[0]:/
+  .rt_nr_running                 : 0
+  .rt_throttled                  : 0
+  .rt_time                       : 19.236327
+--
+rt_rq[0]:/
+  .rt_nr_running                 : 0
+  .rt_throttled                  : 0
+  .rt_time                       : 19.605649
+--
+rt_rq[0]:/
+  .rt_nr_running                 : 0
+  .rt_throttled                  : 0
+  .rt_time                       : 19.915137
+--
+rt_rq[0]:/
+  .rt_nr_running                 : 5
+  .rt_throttled                  : 1
+  .rt_time                       : 4332868.762120
+--
+rt_rq[0]:/
+  .rt_nr_running                 : 17
+  .rt_throttled                  : 1
+  .rt_time                       : 4332868.762120
+--
+rt_rq[0]:/
+  .rt_nr_running                 : 20
+  .rt_throttled                  : 1
+  .rt_time                       : 4332868.762120
+--
+rt_rq[0]:/
+  .rt_nr_running                 : 24
+  .rt_throttled                  : 1
+  .rt_time                       : 4332868.762120
+--
+rt_rq[0]:/
+  .rt_nr_running                 : 27
+  .rt_throttled                  : 1
+  .rt_time                       : 4332868.762120
+
+ -------------->
+ 实时工作队列关闭之后，还是会有进程调度到上面去，导致rt_nr_running越来越多。
+ 
+ 从一个vmcore中分析，发现根cgroup下的rt_se为null，
+   rt_nr_running = 56, 
+    highest_prio = {
+      curr = 0, 
+      next = 0
+    }, 
+    rt_nr_migratory = 48, 
+    rt_nr_total = 56, 
+    overloaded = 1, 
+    pushable_tasks = {
+      prio_list = {
+        next = 0xffff8804ce2b79a0, 
+        prev = 0xffff880afd4184a0
+      }, 
+      node_list = {
+        next = 0xffff8804ce2b79b0, 
+        prev = 0xffff880afd4184b0
+      }
+    }, 
+    rt_throttled = 1, 
+    rt_time = 18524830744144, 
+    rt_runtime = 1000000000, 
+    rt_runtime_lock = {
+      raw_lock = {
+        slock = 2828052624
+      }
+    }, 
+    rt_nr_boosted = 0, 
+    rq = 0xffff880028296700, 
+    leaf_rt_rq_list = {
+      next = 0xffff880028296f80, 
+      prev = 0xffff880028296f80
+    }, 
+    tg = 0xffffffff81e27bc0 <init_task_group>, 
+    rt_se = 0x0
+  }, 
+
+ 根据下面代码，group_rq为null时，即便rt_rq_throttled已经是1了，也会往该队列上加入：
+ 
+ static void __enqueue_rt_entity(struct sched_rt_entity *rt_se, bool head)
+{
+	struct rt_rq *rt_rq = rt_rq_of_se(rt_se);
+	struct rt_prio_array *array = &rt_rq->active;
+	struct rt_rq *group_rq = group_rt_rq(rt_se);
+	struct list_head *queue = array->queue + rt_se_prio(rt_se);
+
+	/*
+	 * Don't enqueue the group if its throttled, or when empty.
+	 * The latter is a consequence of the former when a child group
+	 * get throttled and the current group doesn't have any other
+	 * active members.
+	 */
+	if (group_rq && (rt_rq_throttled(group_rq) || !group_rq->rt_nr_running))
+		return;
+
+	if (!rt_rq->rt_nr_running)
+		list_add_leaf_rt_rq(rt_rq);
+
+	if (head)
+		list_add(&rt_se->run_list, queue);
+	else
+		list_add_tail(&rt_se->run_list, queue);
+	__set_bit(rt_se_prio(rt_se), array->bitmap);
+
+	inc_rt_tasks(rt_se, rt_rq);
+}
+ 
+ ----》这个实现是否不合理？ 能否想法子优化一下
+ 
+ 
+ 
