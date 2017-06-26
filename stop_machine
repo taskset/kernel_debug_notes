@@ -1,0 +1,170 @@
+
+分析内核在卸载模块时的流程，发现在卸载模块时，利用stop_machine()会暂停其他cpu的情况下执行我们需要的操作，这种暂停主要是利用系统的migration%d内核线程组，这个线程组在相互配合的情况下，保证只有一个cpu执行所需要的操作，而其他cpu都在执行cpu_relax()操作。通过编写代码测试发现，利用这种方法确实能达到“暂停”其他cpu的目的。同时，在执行完毕相关的操作之后，不需要人为操作，所有cpu即可恢复到正常状态。
+下面分析一下其具体的流程：
+1、定义每cpu变量DEFINE_PER_CPU(struct cpu_stopper, cpu_stopper)，在启动的时候，会为每个cpu创建migration线程，其主要执行函数为cpu_stopper_thread()，这个函数的主要任务就是读取cpu_stopper中的链表元素，执行链表所在结构体里面的相关函数；
+2、调用stop_machine()函数，这里需要将我们需要执行的函数传递进来，存储到smdata变量，以便稍后传输给1中所说的链表所在结构体里面的相关函数执行；
+3、在__stop_cpus()中定义并初始化一个struct cpu_stop_done done的结构体变量，该变量主要用于线程的同步，设置1中提到的相关函数为stop_machine_cpu_stop()，并将smdata、done变量以及stop_machine_cpu_stop()函数加入到per_cpu(cpu_stopper, cpu)的works链表，唤醒migration线程。
+4、这个时候执行线程调用wait_for_completion()进入睡眠，等待各cpu操作完成之后被唤醒。
+5、各cpu调度migration线程，在cpu_stopper_thread()中执行stop_machine_cpu_stop()函数，该函数主要执行以下操作：
+
+	/* Simple state machine */
+	do {
+		/* Chill out and ensure we re-read stopmachine_state. */
+		cpu_relax();
+		if (smdata->state != curstate) {
+			curstate = smdata->state;
+			switch (curstate) {
+			case STOPMACHINE_DISABLE_IRQ:
+				local_irq_disable();
+				hard_irq_disable();
+				break;
+			case STOPMACHINE_RUN:
+				if (is_active)
+					err = smdata->fn(smdata->data);
+				break;
+			default:
+				break;
+			}
+			ack_state(smdata);
+		}
+	} while (curstate != STOPMACHINE_EXIT);
+
+开始时curstate = STOPMACHINE_NONE，smdata->state=STOPMACHINE_PREPARE，这个时候利用ack_state()函数，使得每个migration线程都执行完了case STOPMACHINE_DISABLE_IRQ之后，再全部执行case STOPMACHINE_RUN，这个时候执行的函数smdata->fn()即为我们自己定义的函数，而此时默认是由cpu0来执行，其他cpu均陷入cpu_relax()，当自定义函数执行完以后，smdata->state被更新为STOPMACHINE_EXIT，所有migration线程均退出stop_machine_cpu_stop()函数，返回到migration函数中的主循环。
+6、在返回到migration主循环后，都会执行cpu_stop_signal_done()函数，这个时候所有migration线程进入睡眠，而最后执行cpu_stop_signal_done()函数的migration线程会唤醒在4中睡眠的我们的执行线程。
+通过以上的操作，在保证了其他cpu均pause的情况下，运行我们需要的操作，而在运行完之后，所有cpu均自动恢复正常运行状态。
+
+测试代码，test_work.c用于生成per cpu内核线程，正常情况下每休眠1s后会被唤醒调度，然后再休眠，cpu_stop.c调用stop_machine()进行测试，在stop_machine()执行期间，test_work的线程无法得到调度。
+
+cpu_stop.c:
+
+#include <linux/stop_machine.h>
+#include <linux/init.h>
+#include <linux/module.h>
+#include <linux/completion.h>
+#include <linux/cpu.h>
+#include <linux/init.h>
+#include <linux/kthread.h>
+#include <linux/export.h>
+#include <linux/percpu.h>
+#include <linux/sched.h>
+#include <linux/stop_machine.h>
+#include <linux/interrupt.h>
+#include <linux/kallsyms.h>
+
+#include <linux/atomic.h>
+
+MODULE_LICENSE("Dual BSD/GPL");
+
+static int stop_cpu_loop(void *arg)
+{
+	unsigned long long int i = 0, j = 0;
+
+	while (i < 5) {
+		i++;
+		j = 0;
+		while (j < 999999999) {
+			j++;
+			cpu_relax();
+		}
+		printk(KERN_ALERT "cpu%d in loop\n", smp_processor_id());
+	}
+	return 0;
+}
+
+static int stop_cpu_func(void)
+{
+	int i = 0;
+	i++;
+	stop_machine(stop_cpu_loop, NULL, NULL);
+	return 0;
+}
+
+static int cpu_stop_init(void)
+{
+	printk(KERN_ALERT "cpu stop init\n");
+	stop_cpu_func();
+	return 0;
+}
+
+static void cpu_stop_exit(void)
+{
+	printk(KERN_ALERT "cpu stop exit\n");
+}
+
+module_init(cpu_stop_init);
+module_exit(cpu_stop_exit);
+
+
+test_work.c:
+                                                
+#include <linux/fs.h>
+#include <linux/init.h>
+#include <linux/module.h>
+#include <linux/proc_fs.h>
+#include <asm/uaccess.h>	/* copy_*_user */
+#include <linux/kthread.h>
+#include <linux/rtc.h>
+#include <linux/sched.h>
+#include <linux/delay.h>
+#include <asm/msr.h>
+#include <linux/sched.h>
+
+MODULE_LICENSE("Dual BSD/GPL");
+
+#define SLEEP_MS 10
+#define DIFF_CHECK(a,b) ((b+SLEEP_MS*100000) < (a+SLEEP_MS*1000000)) 
+
+int tsc_check(unsigned long long tsc,unsigned long long tsc_1)
+{
+	if(!tsc || !tsc_1) {
+		printk("cpu_clock(%d)=%llu\tsched_clock=%llu\n",smp_processor_id(),tsc,tsc_1);
+		return 0;
+	}
+	return 1;
+}
+
+int flag=0;
+
+int dispatch_work(void *date)
+{
+	unsigned long long prev, now;
+	rdtscll(prev);
+	while(1) { 
+		ssleep(1);
+		rdtscll(now);
+		printk("CPU%d, now:%llu, diff:%llu\n", smp_processor_id(), now, now-prev);
+		prev = now;
+	}
+	return 1;
+}
+
+static int hello_init(void)
+{
+	int i, possible_cpus_num;
+	struct task_struct *p;
+	printk(KERN_ALERT "Hello, world\n");
+
+	possible_cpus_num = num_possible_cpus();
+	printk(KERN_ERR "run queue_work test\n-------------------------------------------\n");	
+	for(i = 0; i < possible_cpus_num; i++)
+	{
+        p = kthread_create(dispatch_work, NULL, "test_work_dispatch%d", i);
+		kthread_bind(p, i);	
+		ssleep(1);
+		wake_up_process(p);
+	}
+
+       	return 0;
+}
+
+static void hello_exit(void)
+{
+	flag=1;
+	ssleep(4);
+	printk(KERN_ALERT "Goodbye, cruel world\n");
+}
+
+module_init(hello_init);
+module_exit(hello_exit);
+
+
