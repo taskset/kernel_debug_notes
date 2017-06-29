@@ -1,0 +1,14 @@
+
+[root@node6 alua]# lsmod |grep target_core_user
+target_core_user       23117  3 
+
+怎么找到是谁引用到这个ko？
+
+
+在引用增加的过载中，而已通过ftrace，设置：
+/sys/kernel/debug/tracing/events/module/module_get/enable
+来看到是哪些在使用。
+
+但是当引用计数已经升上去了，再怎么查呢？
+
+
