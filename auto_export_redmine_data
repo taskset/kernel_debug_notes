@@ -1,0 +1,44 @@
+需求：编写脚本自动导出redmine数据（状态所有，列：所有，导出文件格式为csv，提交到FTP：xx.xx.xx.xx /SFTP/measure/redminexx）
+
+实现：
+1，编写stat_issues.sh脚本，用它自动导出上个月的所有数据：
+
+[root@localhost redmine_data]# cat stat_issues.sh 
+#!/bin/bash
+
+EXPORT_DIR=/home/redmine_data/export
+mkdir -p $EXPORT_DIR
+chmod 777 $EXPORT_DIR
+
+QUERY_BEGIN=$(date -d "-1 month" +"%Y-%m-01")
+QUERY_END=$(date +%Y-%m-01)
+
+/home/redmine_data/mysql/bin/mysql  --user=root  --password=PasswordOfRedmine -e "USE bitnami_redmine; SELECT 'ID', 'project', 'status','subject', 'auther', 'assigned_to','updated_on', 'category', 'fixed_version', 'start_date', 'due_date', 'estimated_hours','done_ratio', 'created_on', 'closed_on', 'issue_customer', 'issue_project' UNION ALL SELECT a.id, c.name, h.name, a.subject, e.login, b.login, a.updated_on, d.name, i.name, a.start_date, a.due_date, a.estimated_hours, a.done_ratio, a.created_on, a.closed_on, f.value, g.value FROM issues AS a LEFT JOIN users AS b on a.assigned_to_id = b.id LEFT JOIN  projects AS c ON a.project_id = c.id LEFT JOIN  issue_categories AS d ON a.category_id = d.id LEFT JOIN users AS e on a.author_id = e.id LEFT JOIN custom_values AS f ON (a.id = f.customized_id AND f.custom_field_id=1) LEFT JOIN custom_values as g ON (a.id = g.customized_id AND g.custom_field_id = 3)  LEFT JOIN issue_statuses AS h ON a.status_id = h.id  LEFT JOIN versions AS i ON a.fixed_version_id = i.id  WHERE a.created_on >= '$QUERY_BEGIN' AND a.created_on < '$QUERY_END' INTO OUTFILE '$EXPORT_DIR/query_issues.csv'  FIELDS TERMINATED BY ',' LINES TERMINATED BY '\r\n' ; "
+
+PREV_MONTH_BEGIN=$(date -d "-1 month" +"%Y%m01")
+PREV_MONTH_END=$(date -d "$(date +'%Y%m01') -1 days" +"%Y%m%d")
+SAVE_FILE=$PREV_MONTH_BEGIN-$PREV_MONTH_END.csv
+mv $EXPORT_DIR/query_issues.csv  $EXPORT_DIR/$SAVE_FILE
+
+./upload.sh $EXPORT_DIR/$SAVE_FILE  user  password  xx.xx.xx.xx  /SFTP/measure/redminexx/
+
+2， upload.sh脚本会上传到xx.xx.xx.xx指定的目录下。
+[root@localhost redmine_data]# cat upload.sh 
+#!/usr/bin/expect 
+
+set file [lindex $argv 0]
+set usr [lindex $argv 1]
+set pswd [lindex $argv 2]
+set dst_host [lindex $argv 3]
+set dst_dir [lindex $argv 4]
+spawn scp -r $file  $usr@$dst_host:$dst_dir
+
+set timeout 300
+expect "$usr@$dst_host's password:"
+set timeout 300
+send "$pswd\r"
+set timeout 300
+send "exit\r"
+expect eof
+
+3,简单验证，功能OK
