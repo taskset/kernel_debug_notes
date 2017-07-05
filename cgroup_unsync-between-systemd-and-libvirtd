@@ -1,0 +1,19 @@
+问题：
+虚机启动时，虚机设置的quota是生效的，一段时间后，新启动虚拟机，会把原来虚机的那个设置清掉.
+
+分析：
+libvirtd和systemd之间缺少同步机制，对于cpu.cfs_quota_us等cgroup属性，systemd里面的值是默认值（-1），libvirtd里面的值是虚拟机xml中配置的值。
+创建虚拟机时，systemd先创建出默认值（-1），libvirt再更改为xml中的值（此时使用的操作系统的cgroup文件接口，只更改了操作系统的内容，没有更改systemd的内容）。
+此时systemd和libvirtd的内容不一致了。
+
+用户程序又调用systemctl daemon-reload 此时，systemd有一个bug，没有对cgroup的几个文件序列化/反序列化，会导致重新初始化cgroup属性，
+这样cpu.cfs_quota_us就被又被设置为systemd里面的值-1了。
+
+需合入开源补丁：
+https://github.com/systemd/systemd/commit/8b108bd0ef46f05fa7938abc787e919249459874
+https://github.com/systemd/systemd/commit/de1d4f9b5c6345f63edd46f643485eca909995bf
+及依赖：
+https://github.com/systemd/systemd/commit/aae7e17f9c50015789ccc18a2b8d177730f2d2be
+https://github.com/systemd/systemd/commit/84ac7bea360cd369df26910e9685a7eed2327088
+https://github.com/systemd/systemd/commit/efdb02375beb0a940c3320865572913780b4d7de
+
