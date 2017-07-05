@@ -1,0 +1,22 @@
+遇到的困扰是：
+task_wrapper中用sched_setscheduler设置线程调度策略为SCHED_FIFO，
+但在后继的函数中用pthread_attr_getschedpolicy获取线程调度策略，获取的却是SCHED_OTHER，
+进而导致错误。
+
+---》
+1，sched_setscheduler/sched_getscheduler 是操作系统提供的API，可以用它查询、设置调度策略。
+
+2，pthread_attr_setschedpolicy/pthread_attr_getschedpolicy 是glibc提供的函数，设置/查询 pthread_attr结构体的schedpolicy变量，这时候只是schedpolicy变量的值有变化，线程的调度策略并没有生效：
+In  order  for  the  policy  setting  made  by  pthread_attr_setschedpolicy()  to have effect when calling pthread_create(3), the caller must use
+pthread_attr_setinheritsched(3) to set the inherit-scheduler attribute of the attributes object attr to PTHREAD_EXPLICIT_SCHED.
+还需要调用pthread_attr_setinheritsched、pthread_create，新创建出来的线程才会具有新的调度策略。
+而pthread_create 函数，实际上也是调用sched_setscheduler系统调用来设置新的调度策略的。
+
+可以把pthread_attr_setschedpolicy/pthread_attr_getschedpolicy  看做是封装了sched_setscheduler/sched_getscheduler。
+
+对于下面的问题：
+一个函数中用sched_setscheduler设置线程调度策略为SCHED_FIFO
+----》sched_setscheduler 系统调用直接设置调度策略，不会更改c库pthread_attr结构体的schedpolicy变量。
+
+但在另一个函数中用pthread_attr_getschedpolicy获取线程调度策略，获取的却是SCHED_OTHER
+----》因为c库pthread_attr结构体的schedpolicy变量没有变化，pthread_attr_getschedpolicy获取的就和线程实际的调度策略不一样了。
