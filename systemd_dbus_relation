@@ -1,0 +1,111 @@
+问题：
+创建虚拟机失败，报systemd创建超时
+就是启任何服务都是报超时，systemctl status看都是Failed to forward Released message:no space buffer available。
+
+分析：
+bus看，systemd 都没有注册到dbus上。
+NAME                                                  PID PROCESS         USER             CONNECTION    UNIT                      SESSION    DESCRIPTION        
+:1.0                                                    1 systemd         root             :1.0          -                         -          -                  
+:1.5                                                 5458 busctl          root             :1.5          sshd.service              -          -                  
+
+org.freedesktop.DBus                                    - -               -                -             -                         -          -                  
+org.freedesktop.GeoClue2                                - -               -                (activatable) -                         -         
+org.freedesktop.ModemManager1                           - -               -                (activatable) -                         -         
+org.freedesktop.NetworkManager                          - -               -                (activatable) -                         -         
+org.freedesktop.PackageKit                              - -               -                (activatable) -                         -         
+org.freedesktop.PolicyKit1                              - -               -                (activatable) -                         -         
+org.freedesktop.RealtimeKit1                            - -               -                (activatable) -                         -         
+org.freedesktop.UDisks2                                 - -               -                (activatable) -                         -         
+org.freedesktop.UPower                                  - -               -                (activatable) -                         -         
+org.freedesktop.hostname1                               - -               -                (activatable) -                         -         
+org.freedesktop.locale1                                 - -               -                (activatable) -                         -         
+org.freedesktop.login1                                  - -               -                (activatable) -                         -         
+org.freedesktop.machine1                                - -               -                (activatable) -                         -         
+org.freedesktop.nm_dispatcher                           - -               -                (activatable) -                         -         
+org.freedesktop.problems                                - -               -                (activatable) -                         -         
+org.freedesktop.realmd                                  - -               -                (activatable) -                         -         
+org.freedesktop.systemd1                                - -               -                (activatable) -                         -         
+org.freedesktop.timedate1                               - -               -                (activatable) -                         -         
+org.gnome.GConf.Defaults                                - -               -                (activatable) -                         -         
+
+
+
+报ENOBUFS错误，可能是因为systemd没有注册到dbus，消息发布出去，systemd里面sd_bus的消息大量堵塞，当超过了BUS_WQUEUE_MAX 就报这个错误。
+
+查看systemd的代码，在dbus服务重新激活的情况下，sd_bus会重新初始化、注册到dbus上:
+        /* Some names are special */
+        if (UNIT_IS_ACTIVE_OR_RELOADING(ns)) {
+
+                if (unit_has_name(u, SPECIAL_DBUS_SERVICE))
+                        /* The bus might have just become available,
+                         * hence try to connect to it, if we aren't
+                         * yet connected. */
+                        bus_init(m, true);
+
+再收到SIGUSR1信号时，也会重新初始化、注册：
+                case SIGUSR1: {
+...
+                        u = manager_get_unit(m, SPECIAL_DBUS_SERVICE);
+                        if (!u || UNIT_IS_ACTIVE_OR_RELOADING(unit_active_state(u))) {
+                                log_info("Trying to reconnect to bus...");
+                                bus_init(m, true);
+                        }						
+
+尝试SIGUSR1信号，发现无效：
+ kill -10  1
+ 
+时间紧，就reboot恢复了。
+
+后面在自己的虚拟机上实验：
+[root@localhost ~]# ps -ef | grep dbus
+dbus     21788     1  0 13:47 ?        00:00:00 /bin/dbus-daemon --system --address=systemd: --nofork --nopidfile --systemd-activation
+root     21821 18885  0 13:48 pts/1    00:00:00 grep --color=auto dbus
+[root@localhost ~]# kill 21788
+[root@localhost ~]# mv /bin/dbus-daemon /bin/dbus-daemon.bak
+--->避免dbus被自动起来。
+[root@localhost ~]# busctl  
+Failed to list names: Connection timed out
+--->执行命令会超时
+
+执行1024个命令，让它把队列耗尽:
+for i in {0..1024}
+do
+echo "$i times\n"
+ busctl
+done
+
+然后恢复回去
+mv  /bin/dbus-daemon.bak /bin/dbus-daemon
+						
+最后dbus服务也起不来了,所有服务也会报错,复现了类似的故障。
+
+找到一个恢复方法：
+删除dbus的系统总线套接字
+rm  /var/run/dbus/system_bus_socket
+
+发送信号重启systemd
+kill -15  1
+
+发送信号重新注册dbus
+ kill -10  1
+
+ 这样可以恢复了。
+
+涉及到几个知识：
+1，dbus.socket  和 dbus.service ：
+不删除socket，单独重启服务，发现还是有问题（可能是之前的socket还在，systemd的消息还堵塞着）。
+
+2，dbus和systemd：
+网上有这个说法：
+对于处于用户空间底层的组件（指systemd），用 D-Bus 这样量级的通信机制，不得不卷入“服务发现”、“对象系统”和“认证 API”，还不如使用更简单轻量的IPC。
+http://www.tinylab.org/structural-and-semantic-deficiencies-in-the-systemd-architecture-for-real-world-service-management-part2/
+  
+疑问点，systemd是单进程方式，dbus消息处理、事件处理都是串行一个一个处理的，会不会有性能问题？还需要深入分析。
+比如这个问题，怀疑短时间dbus消息太多，把消息队列撑满，然后dbus服务又发生了重启，某种特殊条件导致引起systemd自身也注册不上去了。
+
+3，systemct命令和kill发送信号： 这个命令完全通过dbus总线操作systemd，当dbus总线堵塞的时候，这个命令会失效，此时需要用kill信号来调试、执行特殊操作，以期恢复。
+比如：
+SIGTERM ---》reexcute
+SIGUSR1 ---》重新注册dbus
+SIGHUP  --》  reload
+
