@@ -5,8 +5,8 @@
 xxx驱动获取锁、关中断之后，寄存器长期读取不到正确的值，中断长期不打开，导致调用smp_call_function、flush_tlb_others等依赖于核间中断的进程都成为受害者，这些进程都将打印soft lockup。
 
 分析过程：
-1, 检查代码，由于通道冲突，xxx驱动的内核线程在CPU 4上获取锁、关中断后178s才返回：
-Jun 25 18:38:25 uds101 kernel: BUG: soft lockup - CPU#4 stuck for 178s! [cgsl-hardwaremo:8279]
+1, 检查代码，xxx驱动代码有问题，存在上时间关中断的情况，其内核线程在CPU 4上获取锁、关中断后178s才返回：
+Jun 25 18:38:25 uds101 kernel: BUG: soft lockup - CPU#4 stuck for 178s! [xxxx:8279]
 Jun 25 18:38:25 uds101 kernel: CPU 4:
 Jun 25 18:38:25 uds101 kernel: RIP: 0010:[<ffffffff80064b20>]  [<ffffffff80064b20>] _spin_unlock_irqrestore+0x8/0x9
 ......
@@ -21,7 +21,7 @@ Jun 25 18:38:26 uds101 kernel:  [<ffffffff800b61b0>] audit_syscall_entry+0x180/0
 Jun 25 18:38:26 uds101 kernel:  [<ffffffff8004c766>] sys_ioctl+0x59/0x78
 Jun 25 18:38:26 uds101 kernel:  [<ffffffff8005d28d>] tracesys+0xd5/0xe
 
-2，由于硬件监控进程关闭了CPU 4上的中断，会导致smp_call_function挂住，因为smp_call_function也是通过核间中断在其他cpu上运行的。
+2，由于xxxx进程关闭了CPU 4上的中断，会导致smp_call_function挂住，因为smp_call_function也是通过核间中断在其他cpu上运行的。
 fdisk 在CPU15上等待smp_call_function执行完，CPU 15也进入soft lockup
 Jun 25 18:35:10 uds101 kernel: BUG: soft lockup - CPU#15 stuck for 10s! [fdisk:16644]
 Jun 25 18:35:10 uds101 kernel: CPU 15
@@ -63,9 +63,9 @@ Jun 25 18:38:25 uds101 kernel:  [<ffffffff8003288d>] kthread+0x0/0x132
 Jun 25 18:38:25 uds101 kernel:  [<ffffffff8005dfa7>] child_rip+0x0/0x1
 
 4，flush_tlb_others 也是通过核间中断实现的，调用flush_tlb_others的进程也会进入soft lockup。
-CPU12 上的cgsl-hardwaremo 就是因为调用了flush_tlb_others而进入软锁：
+CPU12 上的yyyy 就是因为调用了flush_tlb_others而进入软锁：
 
-Jun 25 18:38:14 uds101 kernel: BUG: soft lockup - CPU#12 stuck for 10s! [cgsl-hardwaremo:8277]
+Jun 25 18:38:14 uds101 kernel: BUG: soft lockup - CPU#12 stuck for 10s! [yyyy:8277]
 Jun 25 18:38:14 uds101 kernel: CPU 12
 ...
 Jun 25 18:38:14 uds101 kernel: RIP: 0010:[<ffffffff800160c6>]  [<ffffffff800160c6>] __bitmap_empty+0x5f/0x62
