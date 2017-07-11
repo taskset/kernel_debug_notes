@@ -1,0 +1,84 @@
+问题现象：
+多个cpu上报softlockup
+
+问题原因：
+xxx驱动获取锁、关中断之后，寄存器长期读取不到正确的值，中断长期不打开，导致调用smp_call_function、flush_tlb_others等依赖于核间中断的进程都成为受害者，这些进程都将打印soft lockup。
+
+分析过程：
+1, 检查代码，由于通道冲突，xxx驱动的内核线程在CPU 4上获取锁、关中断后178s才返回：
+Jun 25 18:38:25 uds101 kernel: BUG: soft lockup - CPU#4 stuck for 178s! [cgsl-hardwaremo:8279]
+Jun 25 18:38:25 uds101 kernel: CPU 4:
+Jun 25 18:38:25 uds101 kernel: RIP: 0010:[<ffffffff80064b20>]  [<ffffffff80064b20>] _spin_unlock_irqrestore+0x8/0x9
+......
+Jun 25 18:38:25 uds101 kernel: Call Trace:
+Jun 25 18:38:25 uds101 kernel:  [<ffffffff88445358>] :xxx_kcs_drv:do_kcs_request+0xbe/0xe3
+Jun 25 18:38:25 uds101 kernel:  [<ffffffff884461f1>] :xxx_kcs_drv:xxx_kcs_Ioctl+0xb9e/0xc25
+Jun 25 18:38:26 uds101 kernel:  [<ffffffff80062fc8>] thread_return+0x62/0xfe
+Jun 25 18:38:26 uds101 kernel:  [<ffffffff8004e6f9>] lock_hrtimer_base+0x26/0x4c
+Jun 25 18:38:26 uds101 kernel:  [<ffffffff800420a5>] do_ioctl+0x21/0x6b
+Jun 25 18:38:26 uds101 kernel:  [<ffffffff800302ce>] vfs_ioctl+0x457/0x4b9
+Jun 25 18:38:26 uds101 kernel:  [<ffffffff800b61b0>] audit_syscall_entry+0x180/0x1b3
+Jun 25 18:38:26 uds101 kernel:  [<ffffffff8004c766>] sys_ioctl+0x59/0x78
+Jun 25 18:38:26 uds101 kernel:  [<ffffffff8005d28d>] tracesys+0xd5/0xe
+
+2，由于硬件监控进程关闭了CPU 4上的中断，会导致smp_call_function挂住，因为smp_call_function也是通过核间中断在其他cpu上运行的。
+fdisk 在CPU15上等待smp_call_function执行完，CPU 15也进入soft lockup
+Jun 25 18:35:10 uds101 kernel: BUG: soft lockup - CPU#15 stuck for 10s! [fdisk:16644]
+Jun 25 18:35:10 uds101 kernel: CPU 15
+Jun 25 18:35:10 uds101 kernel: Pid: 16644, comm: fdisk Tainted: P      2.6.18-164.el5 #1
+Jun 25 18:35:10 uds101 kernel: RIP: 0010:[<ffffffff80075c0e>]  [<ffffffff80075
+Jun 25 18:38:12 uds101 kernel: Call Trace:
+Jun 25 18:38:13 uds101 kernel:  [<ffffffff80075c0a>] __smp_call_function+0x62/0x8b
+Jun 25 18:38:13 uds101 kernel:  [<ffffffff8003daef>] invalidate_bh_lru+0x0/0x42
+Jun 25 18:38:13 uds101 kernel:  [<ffffffff80075d40>] smp_call_function+0x32/0x47
+Jun 25 18:38:13 uds101 kernel:  [<ffffffff8003daef>] invalidate_bh_lru+0x0/0x42
+Jun 25 18:38:13 uds101 kernel:  [<ffffffff8009359a>] on_each_cpu+0x10/0x22
+Jun 25 18:38:13 uds101 kernel:  [<ffffffff800e2d8c>] kill_bdev+0x1b/0x30
+Jun 25 18:38:13 uds101 kernel:  [<ffffffff800e336b>] __blkdev_put+0x4f/0x169
+Jun 25 18:38:13 uds101 kernel:  [<ffffffff800129f1>] __fput+0xae/0x198
+Jun 25 18:38:13 uds101 kernel:  [<ffffffff800239ea>] filp_close+0x5c/0x64
+Jun 25 18:38:13 uds101 kernel:  [<ffffffff8001dec5>] sys_close+0x88/0xbd
+Jun 25 18:38:13 uds101 kernel:  [<ffffffff8005d28d>] tracesys+0xd5/0xe
+
+3，上一个smp_call_function没有结束， 其他调用smp_call_function的进程，会获取不到锁，也间接被堵塞：
+CPU8 上的events/8:58内核线程因为smp_call_function获取不到锁，也成为受害者，打印soft lockup：
+Jun 25 18:38:24 uds101 kernel: BUG: soft lockup - CPU#8 stuck for 10s! [events/8:58]
+Jun 25 18:38:24 uds101 kernel: CPU 8
+Jun 25 18:38:25 uds101 kernel: Pid: 58, comm: events/8 Tainted: P      2.6.18-164.el5 #1
+Jun 25 18:38:25 uds101 kernel: RIP: 0010:[<ffffffff80064bcf>]  [<ffffffff80064bcf>] .text.lock.spinlock+0x5/0x30
+......
+Jun 25 18:38:25 uds101 kernel: 
+Jun 25 18:38:25 uds101 kernel: Call Trace:
+Jun 25 18:38:25 uds101 kernel:  [<ffffffff80075d30>] smp_call_function+0x22/0x47
+Jun 25 18:38:25 uds101 kernel:  [<ffffffff80072404>] mcheck_check_cpu+0x0/0x2f
+Jun 25 18:38:25 uds101 kernel:  [<ffffffff8009359a>] on_each_cpu+0x10/0x22
+Jun 25 18:38:25 uds101 kernel:  [<ffffffff8007172f>] mcheck_timer+0x1c/0x6c
+Jun 25 18:38:25 uds101 kernel:  [<ffffffff8004d80a>] run_workqueue+0x94/0xe4
+Jun 25 18:38:25 uds101 kernel:  [<ffffffff8004a052>] worker_thread+0x0/0x122
+Jun 25 18:38:25 uds101 kernel:  [<ffffffff8004a142>] worker_thread+0xf0/0x122
+Jun 25 18:38:25 uds101 kernel:  [<ffffffff8008be71>] default_wake_function+0x0/0xe
+Jun 25 18:38:25 uds101 kernel:  [<ffffffff8003298b>] kthread+0xfe/0x132
+Jun 25 18:38:25 uds101 kernel:  [<ffffffff8005dfb1>] child_rip+0xa/0x11
+Jun 25 18:38:25 uds101 kernel:  [<ffffffff8003288d>] kthread+0x0/0x132
+Jun 25 18:38:25 uds101 kernel:  [<ffffffff8005dfa7>] child_rip+0x0/0x1
+
+4，flush_tlb_others 也是通过核间中断实现的，调用flush_tlb_others的进程也会进入soft lockup。
+CPU12 上的cgsl-hardwaremo 就是因为调用了flush_tlb_others而进入软锁：
+
+Jun 25 18:38:14 uds101 kernel: BUG: soft lockup - CPU#12 stuck for 10s! [cgsl-hardwaremo:8277]
+Jun 25 18:38:14 uds101 kernel: CPU 12
+...
+Jun 25 18:38:14 uds101 kernel: RIP: 0010:[<ffffffff800160c6>]  [<ffffffff800160c6>] __bitmap_empty+0x5f/0x62
+Jun 25 18:38:14 uds101 kernel: RSP: 0018:ffff810320229e10  EFLAGS: 0000024
+...
+Jun 25 18:38:15 uds101 kernel:  [<ffffffff80022e6c>] flush_tlb_others+0x99/0xbc
+Jun 25 18:38:15 uds101 kernel:  [<ffffffff80075ea3>] flush_tlb_mm+0xca/0xd5
+Jun 25 18:38:15 uds101 kernel:  [<ffffffff80012c80>] unmap_region+0x104/0x12b
+Jun 25 18:38:15 uds101 kernel:  [<ffffffff80011d98>] do_munmap+0x1fd/0x27a
+Jun 25 18:38:15 uds101 kernel:  [<ffffffff8006457b>] __down_write_nested+0x12/0x92
+Jun 25 18:38:15 uds101 kernel:  [<ffffffff80016109>] sys_munmap+0x40/0x59
+Jun 25 18:38:15 uds101 kernel:  [<ffffffff8005d28d>] tracesys+0xd5/0xe
+
+现在的疑问是softlockup之前，应该hard lockup先就会检查出来，但是这里却没有hardlockup，推测两个原因：
+1，nmi_watchdog 没有打开；
+2，mcheck_timer函数中，会对nmi_watchdog进行喂狗。
