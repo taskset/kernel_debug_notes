@@ -1,9 +1,8 @@
 net_dma 有BUG，在高版本内核中删掉了
 --->
 
-2017-05-26 13:10:05*[文洋10156314]说:
 	https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=7bced397510ab569d31de4c70b39e13355046387
-2017-05-26 13:10:17*[文洋10156314]说:
+
 commit 7bced397510ab569d31de4c70b39e13355046387
 Author: Dan Williams <dan.j.williams@intel.com>
 Date:   Mon Dec 30 12:37:29 2013 -0800
