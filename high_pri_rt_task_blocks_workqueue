@@ -1,0 +1,82 @@
+问题原因：
+产品在隔离核上长期运行实时任务高优先级任务，阻碍该cpu核上的其他系统任务的运行，包括内核的工作线程。
+
+这个故障产生时的场景： 
+第一步：libvirt进程，在获取了cgroup_mutex锁之后，还会触发所有cpu上的kworker执行lru_add_drain_per_cpu任务：
+PID: 44145  TASK: ffff8807bec7b980  CPU: 0   COMMAND: "libvirtd" 
+         #0 [ffff8807f2cbb9d0] __schedule at ffffffff816410ed
+         #1 [ffff8807f2cbba38] schedule at ffffffff81641789
+         #2 [ffff8807f2cbba48] schedule_timeout at ffffffff8163f479
+         #3 [ffff8807f2cbbaf8] wait_for_completion at ffffffff81641b56
+         #4 [ffff8807f2cbbb58] flush_work at ffffffff8109efdc
+         #5 [ffff8807f2cbbbd0] lru_add_drain_all at ffffffff81179002
+         #6 [ffff8807f2cbbc08] migrate_prep at ffffffff811c77be
+         #7 [ffff8807f2cbbc18] do_migrate_pages at ffffffff811b8010
+         #8 [ffff8807f2cbbcf8] cpuset_migrate_mm at ffffffff810fea6c
+         #9 [ffff8807f2cbbd10] cpuset_attach at ffffffff810ff91e
+        #10 [ffff8807f2cbbd50] cgroup_attach_task at ffffffff810f9972
+        #11 [ffff8807f2cbbe08] attach_task_by_pid at ffffffff810fa520
+        #12 [ffff8807f2cbbe58] cgroup_tasks_write at ffffffff810fa593
+        #13 [ffff8807f2cbbe68] cgroup_file_write at ffffffff810f8773
+        #14 [ffff8807f2cbbef8] vfs_write at ffffffff811dfdfd
+        #15 [ffff8807f2cbbf38] sys_write at ffffffff811e089f
+        #16 [ffff8807f2cbbf80] system_call_fastpath at ffffffff8164c809
+这里在持有锁（cgroup_mutex）等待所有cpu上的kworker都执行完之后，流程才能继续进行下去。
+
+第二步：系统中，CPU 43隔离出去了，而且在长时间运行高优先级的实时进程（xxx进程）。
+ 而cpu43 上的kworker内核线程默认是普通优先级的，比xxx进程低。
+ 所以cpu43 上的kworker长时间得不到调度，上面的第一步一直无法完成。
+
+第三步： systemd进程（受害者），会访问cgroup_mutex锁
+int proc_cgroup_show(struct seq_file *m, void *v) 函数： mutex_lock(&cgroup_mutex);
+PID: 1      TASK: ffff883fd2d40000  CPU: 28  COMMAND: "systemd" 
+         #0 [ffff881fd317bd60] __schedule at ffffffff816410ed
+         #1 [ffff881fd317bdc8] schedule_preempt_disabled at ffffffff81642869
+         #2 [ffff881fd317bdd8] __mutex_lock_slowpath at ffffffff81640565
+         #3 [ffff881fd317be38] mutex_lock at ffffffff8163f9cf
+         #4 [ffff881fd317be50] proc_cgroup_show at ffffffff810fd256
+         #5 [ffff881fd317be98] seq_read at ffffffff81203cda
+         #6 [ffff881fd317bf08] vfs_read at ffffffff811dfc6c
+         #7 [ffff881fd317bf38] sys_read at ffffffff811e07bf
+         #8 [ffff881fd317bf80] system_call_fastpath at ffffffff81
+因为cgroup_mutex锁已经被第一步的libvirt进程获取了，libvirtd进程又一直堵塞，所以引起systemd获取不到锁，被堵塞住。
+        由于systemd堵塞了，所有依赖systemd的服务，包括新建ssh连接、执行systemctl命令，都会被堵塞。
+
+
+问题的规避方案：
+提供调整kworker优先级的脚本给产品，他们按照具体部署情况更改后（修改cpu核、需要的优先级）执行，可以规避： 1.cat set_kworker_pri.sh 
+
+#!/bin/bash
+
+cpu_list="1 2 3 25 26 27" 
+adj_pri=61
+
+for cpu in ${cpu_list}
+do
+ for pid in $(ps -ef | grep "kworker\/$cpu:" | awk '{print $2}')
+ do
+ chrt -f -p $adj_pri $pid
+ chrt -p $pid
+ done
+done
+
+
+开源相关补丁： 
+commit b05a79280b346eb24ddb73b39988398015291075
+Author: Frederic Weisbecker <fweisbec@gmail.com>
+Date:   Mon Apr 27 17:58:39 2015 +0800
+
+    workqueue: Create low-level unbound workqueues cpumask
+    
+    Create a cpumask that limits the affinity of all unbound workqueues.
+    This cpumask is controlled through a file at the root of the workqueue
+    sysfs directory.
+    
+    It works on a lower-level than the per WQ_SYSFS workqueues cpumask files
+    such that the effective cpumask applied for a given unbound workqueue is
+    the intersection of /sys/devices/virtual/workqueue/$WORKQUEUE/cpumask and
+    the new /sys/devices/virtual/workqueue/cpumask file.
+
+但解决不了问题。
+
+
