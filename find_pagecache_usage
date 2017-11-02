@@ -1,0 +1,66 @@
+问题：vmcore中，pagecache太大了，怎么找出某个文件系统，占用了多少内存? 
+具体是哪些文件使用的？
+
+方法：
+以dev/mapper/vg_sys-lv_root为例：
+
+首先寻找挂载点：
+crash> mount
+ffff881fcf910f00 ffff8827e3dcc800 ext4   /dev/mapper/vg_sys-lv_root /
+
+解析super_block 中的inode：
+crash> super_block.s_inodes  ffff8827e3dcc800
+  s_inodes = {
+    next = 0xffff88056aa936f0, 
+    prev = 0xffff881fcb1981b8
+  }
+  
+解析inode链表，列出address_space:
+crash> list  -o  0x108  -H     0xffff88056aa936f0   -s inode.i_mapping  > ext4_inodes.txt
+ext4_inodes.txt 的内容类似下面：
+  ffff881fcb199528
+  i_mapping = 0xffff881fcb199678
+ffff881fcb1988e0
+  i_mapping = 0xffff881fcb198a30
+ffff881fcb1984c8
+  i_mapping = 0xffff881fcb198618
+ffff881fcb1b08e0
+  i_mapping = 0xffff881fcb1b0a30
+ffff881fcb1b04c8
+  i_mapping = 0xffff881fcb1b0618
+ffff881fcb1b00b0
+  i_mapping = 0xffff881fcb1b0200
+ffff881fcb1980b0
+  i_mapping = 0xffff881fcb198200
+
+解析address_space中的nrpages，它表示该inode使用了多少page：
+#  cat ext4_inodes.txt  | grep i_mapping  |   awk '{ print "address_space.nrpages  "  $3}'  > ext4_inodes_mapping.txt
+
+crash> < ext4_inodes_mapping.txt > ext4_inodes_pages.txt
+
+类似 于这样的内容：
+crash> address_space.nrpages  0xffff881fcb19b320
+  nrpages = 23082
+crash> address_space.nrpages  0xffff881fcb19a2c0
+  nrpages = 0
+crash> address_space.nrpages  0xffff881fcb1b0a30
+  nrpages = 0
+crash> address_space.nrpages  0xffff881fcb1b0618
+  nrpages = 61
+
+ 统计总共用了多少page：
+# cat ext4_inodes_pages.txt  | grep -v address_space  | awk 'BEGIN{sum=0}{sum+=$3}END{print sum}'
+775550
+
+找出ext4_inodes_pages.txt中，top几个使用page最多的inode：
+address_space.nrpages  0xffff8807cb43f8b8
+  nrpages = 2530241
+  
+  列出所有的打开文件：
+crash> foreach files > all_files.txt
+
+就可以在里面找出inode对应的文件路径：
+ffff8807cb43f768 REG  /xx/xxx/xxxx/xxxxxx/90f5934f6a693875e79cf25a2b982a50ffb4acd7 
+  
+
+
