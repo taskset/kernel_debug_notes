@@ -63,4 +63,47 @@ crash> foreach files > all_files.txt
 ffff8807cb43f768 REG  /xx/xxx/xxxx/xxxxxx/90f5934f6a693875e79cf25a2b982a50ffb4acd7 
   
 
+=====》用到的数据结构及其关系：
+struct super_block {
+	struct list_head	s_list;		/* Keep this first */
+	dev_t			s_dev;		/* search index; _not_ kdev_t */
+	unsigned char		s_blocksize_bits;
+	unsigned long		s_blocksize;
+	loff_t			s_maxbytes;	/* Max file size */
+	struct file_system_type	*s_type;
+......
+	struct list_head	s_inodes;	/* all inodes */
+	struct hlist_bl_head	s_anon;		/* anonymous dentries for (nfs) exporting */
+......
+};
+
+super_block->s_inodes,该文件系统的所有inode：
+
+struct inode {
+	umode_t			i_mode;
+	unsigned short		i_opflags;
+	kuid_t			i_uid;
+	kgid_t			i_gid;
+	unsigned int		i_flags;
+......
+
+	const struct inode_operations	*i_op;
+	struct super_block	*i_sb;
+	struct address_space	*i_mapping;
+......
+};
+
+inode->i_mapping，该文件的地址空间
+
+struct address_space {
+	struct inode		*host;		/* owner: inode, block_device */
+	struct radix_tree_root	page_tree;	/* radix tree of all pages */
+......
+	unsigned long		nrpages;	/* number of total pages */
+......
+} __attribute__((aligned(sizeof(long))));
+
+address_space->nrpages 该地址空间的页缓存数目
+
+
 
