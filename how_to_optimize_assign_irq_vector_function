@@ -1,0 +1,149 @@
+
+__assign_irq_vector 函数逻辑，分配了新的vector之后，老的vector没有初始化为-1，该如何优化呢？
+
+static int
+__assign_irq_vector(int irq, struct irq_cfg *cfg, const struct cpumask *mask)
+{
+	/*
+	 * NOTE! The local APIC isn't very good at handling
+	 * multiple interrupts at the same interrupt level.
+	 * As the interrupt level is determined by taking the
+	 * vector number and shifting that right by 4, we
+	 * want to spread these out a bit so that they don't
+	 * all fall in the same interrupt level.
+	 *
+	 * Also, we've got to be careful not to trash gate
+	 * 0x80, because int 0x80 is hm, kind of importantish. ;)
+	 */
+	static int current_vector = FIRST_EXTERNAL_VECTOR + VECTOR_OFFSET_START;
+	static int current_offset = VECTOR_OFFSET_START % 16;
+----》static变量，下次从这里开始分配vector
+
+	int cpu, err;
+	cpumask_var_t tmp_mask;
+
+	if (cfg->move_in_progress)
+		return -EBUSY;
+
+	if (!alloc_cpumask_var(&tmp_mask, GFP_ATOMIC))
+		return -ENOMEM;
+
+	/* Only try and allocate irqs on cpus that are present */
+	err = -ENOSPC;
+----》初始的错误码
+
+	cpumask_clear(cfg->old_domain);
+	cpu = cpumask_first_and(mask, cpu_online_mask);
+	while (cpu < nr_cpu_ids) {
+		int new_cpu, vector, offset;
+
+		apic->vector_allocation_domain(cpu, tmp_mask, mask);    
+---》故障环境的apic是apic_physflat， 对应的vector_allocation_domain函数，只是把CPU掩码拷贝过去：
+static inline void
+default_vector_allocation_domain(int cpu, struct cpumask *retmask,
+				 const struct cpumask *mask)
+{
+	cpumask_copy(retmask, cpumask_of(cpu));
+}
+
+		if (cpumask_subset(tmp_mask, cfg->domain)) {
+			err = 0;
+			if (cpumask_equal(tmp_mask, cfg->domain))
+				break;
+			/*
+			 * New cpumask using the vector is a proper subset of
+			 * the current in use mask. So cleanup the vector
+			 * allocation for the members that are not used anymore.
+			 */
+			cpumask_andnot(cfg->old_domain, cfg->domain, tmp_mask);
+			cfg->move_in_progress =
+			   cpumask_intersects(cfg->old_domain, cpu_online_mask);
+			cpumask_and(cfg->domain, cfg->domain, tmp_mask);
+			break;
+		}
+		vector = current_vector;
+		offset = current_offset;
+next:
+		vector += 16;
+		if (vector >= first_system_vector) {
+			offset = (offset + 1) % 16;
+			vector = FIRST_EXTERNAL_VECTOR + offset;
+		}
+
+		if (unlikely(current_vector == vector)) {
+			cpumask_or(cfg->old_domain, cfg->old_domain, tmp_mask);
+			cpumask_andnot(tmp_mask, mask, cfg->old_domain);
+			cpu = cpumask_first_and(tmp_mask, cpu_online_mask);
+			continue;
+		}
+       ----》由于cpu只有一个，只要进入这个分支continue，就会跳出循环，返回错误码。
+
+		if (test_bit(vector, used_vectors))
+			goto next;
+
+		for_each_cpu_and(new_cpu, tmp_mask, cpu_online_mask) {
+			if (per_cpu(vector_irq, new_cpu)[vector] > VECTOR_UNDEFINED)
+				goto next;
+----》如果percpu的vector_irq里面，vector小标为非-1， 说明以前分配过，继续选择下一个vector分配。
+		}
+		/* Found one! */
+		current_vector = vector;
+		current_offset = offset;
+		if (cfg->vector) {
+			cpumask_copy(cfg->old_domain, cfg->domain);
+			cfg->move_in_progress =
+			   cpumask_intersects(cfg->old_domain, cpu_online_mask);
+		}
+		for_each_cpu_and(new_cpu, tmp_mask, cpu_online_mask)
+			per_cpu(vector_irq, new_cpu)[vector] = irq;
+----》分配vector成功之后，把vector下标对应的内容填写为irq值。
+这个地方的逻辑应该有问题，分配新的vector之后，只是更改了新的vector对应的下标值；
+但是没有处理老的vector的下标，没有恢复为-1，这样老的vector就相当于泄露了，再也无法使用了。
+现在就有类似的问题，某个产品他们的中断有1900多个，对若干个中断都执行绑核之后，会失败，stap跟踪到是这个函数报错。
+
+		cfg->vector = vector;
+		cpumask_copy(cfg->domain, tmp_mask);
+		err = 0;
+		break;
+	}
+	free_cpumask_var(tmp_mask);
+	return err;
+}
+
+
+在中断处理do_IRQ函数中，handle_irq出错之后，才会把报错的vector初始化为-1.
+unsigned int __irq_entry do_IRQ(struct pt_regs *regs)
+{
+	struct pt_regs *old_regs = set_irq_regs(regs);
+
+	/* high bit used in ret_from_ code  */
+	unsigned vector = ~regs->orig_ax;
+	unsigned irq;
+
+	irq_enter();
+	exit_idle();
+
+	irq = __this_cpu_read(vector_irq[vector]);
+
+	if (!handle_irq(irq, regs)) {
+		ack_APIC_irq();
+
+		if (irq != VECTOR_RETRIGGERED) {
+			pr_emerg_ratelimited("%s: %d.%d No irq handler for vector (irq %d)\n",
+					     __func__, smp_processor_id(),
+					     vector, irq);
+		} else {
+			__this_cpu_write(vector_irq[vector], VECTOR_UNDEFINED);
+		}
+	}
+
+	irq_exit();
+
+	set_irq_regs(old_regs);
+	return 1;
+}
+
+如果对irq设置了中断亲和性，老的vector、新的vector都会有效，老的vector又不会清除（除非cpuoffline），这样vector可能会原来越少。
+该如何优化？？
+
+
