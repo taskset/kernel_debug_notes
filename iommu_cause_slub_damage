@@ -1,0 +1,163 @@
+问题现象：系统panic了
+
+分析vmcore：
+
+报错的进程的堆栈，在kmalloc的时候，空指针异常了：
+crash> bt
+PID: 43557  TASK: ffff880fdf41e780  CPU: 18  COMMAND: "lscpu"
+ #0 [ffff880fe9493780] machine_kexec at ffffffff81051c5b
+ #1 [ffff880fe94937e0] crash_kexec at ffffffff810f31a2
+ #2 [ffff880fe94938b0] oops_end at ffffffff81644f88
+ #3 [ffff880fe94938d8] no_context at ffffffff816350ab
+ #4 [ffff880fe9493928] __bad_area_nosemaphore at ffffffff81635141
+ #5 [ffff880fe9493970] bad_area at ffffffff81635465
+ #6 [ffff880fe9493998] __do_page_fault at ffffffff81647df5
+ #7 [ffff880fe94939f8] do_page_fault at ffffffff81647f23
+ #8 [ffff880fe9493a20] page_fault at ffffffff81644188
+    [exception RIP: __kmalloc+149]
+    RIP: ffffffff811c34e5  RSP: ffff880fe9493ad8  RFLAGS: 00010286
+    RAX: 0000000000000000  RBX: 000000000000001d  RCX: 0000000000c4c1f8
+    RDX: 0000000000c4c1f7  RSI: 0000000000000000  RDI: 0000000000000003
+    RBP: ffff880fe9493b08   R8: 0000000000017540   R9: ffffffff8129ee91
+    R10: ffff88046f403c00  R11: 0000000000000003  R12: 00000000000000d0
+    R13: 0000007c0000007c  R14: 000000000000001e  R15: ffff88046f403c00
+    ORIG_RAX: ffffffffffffffff  CS: 0010  SS: 0018
+ #9 [ffff880fe9493b10] security_context_to_sid_core at ffffffff8129ee91
+#10 [ffff880fe9493bb0] security_context_to_sid at ffffffff812a0ab9
+#11 [ffff880fe9493bc0] selinux_inode_setsecurity at ffffffff81290dbd
+#12 [ffff880fe9493bf8] selinux_inode_notifysecctx at ffffffff81290ead
+#13 [ffff880fe9493c08] security_inode_notifysecctx at ffffffff812873c6
+#14 [ffff880fe9493c18] sysfs_refresh_inode at ffffffff8125a860
+#15 [ffff880fe9493c38] sysfs_permission at ffffffff8125a91d
+#16 [ffff880fe9493c60] __inode_permission at ffffffff811eb36e
+#17 [ffff880fe9493c88] inode_permission at ffffffff811eb3d8
+#18 [ffff880fe9493c98] link_path_walk at ffffffff811ee8fe
+#19 [ffff880fe9493d48] path_lookupat at ffffffff811ef08b
+#20 [ffff880fe9493de0] filename_lookup at ffffffff811ef7eb
+#21 [ffff880fe9493e18] user_path_at_empty at ffffffff811f15b7
+#22 [ffff880fe9493ef0] user_path_at at ffffffff811f1621
+#23 [ffff880fe9493f00] sys_faccessat at ffffffff811de5b2
+#24 [ffff880fe9493f70] sys_access at ffffffff811de748
+#25 [ffff880fe9493f80] system_call_fastpath at ffffffff8164c709
+
+
+RIP是__kmalloc+149，反汇编这个函数：
+crash> dis -l __kmalloc
+......
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.x86_64/mm/slub.c: 2373
+0xffffffff811c34b1 <__kmalloc+97>:  mov    (%r10),%r8
+0xffffffff811c34b4 <__kmalloc+100>: add    %gs:0xcee8,%r8
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.x86_64/mm/slub.c: 2381
+0xffffffff811c34bd <__kmalloc+109>: mov    0x8(%r8),%rdx
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.x86_64/mm/slub.c: 2384
+0xffffffff811c34c1 <__kmalloc+113>: mov    (%r8),%r13
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.x86_64/mm/slub.c: 2385
+0xffffffff811c34c4 <__kmalloc+116>: mov    0x10(%r8),%rax
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.x86_64/mm/slub.c: 2386
+0xffffffff811c34c8 <__kmalloc+120>: test   %r13,%r13
+0xffffffff811c34cb <__kmalloc+123>: je     0xffffffff811c3601 <__kmalloc+433>
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.x86_64/mm/slub.c: 2064
+0xffffffff811c34d1 <__kmalloc+129>: test   %rax,%rax
+0xffffffff811c34d4 <__kmalloc+132>: je     0xffffffff811c3601 <__kmalloc+433>
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.x86_64/mm/slub.c: 251 
+0xffffffff811c34da <__kmalloc+138>: movslq 0x20(%r10),%rax
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.x86_64/mm/slub.c: 1701
+0xffffffff811c34de <__kmalloc+142>: lea    0x1(%rdx),%rcx
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.x86_64/mm/slub.c: 2404
+0xffffffff811c34e2 <__kmalloc+146>: mov    (%r10),%r8
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.x86_64/mm/slub.c: 251 
+0xffffffff811c34e5 <__kmalloc+149>: mov    0x0(%r13,%rax,1),%rbx
+
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.x86_64/mm/slub.c: 251 
+0xffffffff811c34da <__kmalloc+138>: movslq 0x20(%r10),%rax
+-->这一行报错，即这个函数：
+static inline void *get_freepointer(struct kmem_cache *s, void *object)
+{
+	return *(void **)(object + s->offset);
+}
+
+分析kmem_cache结构体，偏移0x20 的字段是[0x20] int offset:
+crash> struct -xo kmem_cache
+struct kmem_cache {
+     [0x0] struct kmem_cache_cpu *cpu_slab;
+     [0x8] unsigned long flags;
+    [0x10] unsigned long min_partial;
+    [0x18] int size;
+    [0x1c] int object_size;
+    [0x20] int offset;
+    [0x24] int cpu_partial;
+    [0x28] struct kmem_cache_order_objects oo;
+    [0x30] struct kmem_cache_order_objects max;
+    [0x38] struct kmem_cache_order_objects min;
+    [0x40] gfp_t allocflags;
+    [0x44] int refcount;
+    [0x48] void (*ctor)(void *);
+    [0x50] int inuse;
+    [0x54] int align;
+    [0x58] int reserved;
+    [0x60] const char *name;
+    [0x68] struct list_head list;
+    [0x78] struct kobject kobj;
+    [0xb8] struct memcg_cache_params *memcg_params;
+    [0xc0] int max_attr_size;
+    [0xc4] int remote_node_defrag_ratio;
+    [0xc8] struct kmem_cache_node *node[1024];
+}
+SIZE: 0x20c8
+
+所以推出r10是kmem_cache的地址， 结合汇编代码继续推：
+r13 （0000007c0000007c）是object的值，
+r8 （0000000000017540）是offset的值。
+
+解析kmem_cache，也可以验证：
+crash> struct kmem_cache ffff88046f403c00
+struct kmem_cache {
+  cpu_slab = 0x17540, 
+  flags = 1073741824, 
+  min_partial = 5, 
+  size = 32, 
+  object_size = 32, 
+  offset = 0, 
+  cpu_partial = 30, 
+
+对这一行分析一下：
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.x86_64/mm/slub.c: 2373
+0xffffffff811c34b1 <__kmalloc+97>:  mov    (%r10),%r8
+0xffffffff811c34b4 <__kmalloc+100>: add    %gs:0xcee8,%r8
+
+代码：
+	c = __this_cpu_ptr(s->cpu_slab);
+获取了kmem_cache_cpu的值。
+
+通过crash的kmem命令，也可以去人slub的结构被破坏了：
+crash> kmem -S ffff88046f403c00
+CACHE            NAME                 OBJSIZE  ALLOCATED     TOTAL  SLABS  SSIZE
+kmem: kmalloc-32: slab: ffffea003fac0a00 invalid freepointer: 7c0000007c
+ffff88046f403c00 kmalloc-32                32     128661    187264   1463     4k
+......
+CPU 18 KMEM_CACHE_CPU:
+  ffff88104f2d7540
+CPU 18 SLAB:
+  SLAB              MEMORY            NODE  TOTAL  ALLOCATED  FREE
+kmem: kmalloc-32: slab: ffffea003fac0a00 invalid freepointer: 7c0000007c
+  ffffea003fac0a00  ffff880feb028000     1    128        127     1
+  FREE / [ALLOCATED]
+kmem: kmalloc-32: slab: ffffea003fac0a00 invalid freepointer: 7c0000007c
+
+kmalloc-32在cpu18上的cpu_slab结构，里面的freelist被破坏了。
+这个是percpu变量cpu_slab 里面的freelist，按道理只应该自己使用，怎么会被破坏,这个地方非常费解。 
+
+再继续分析日志，发现故障之前，还有iommu的错误：
+[62438.586501] NMI: IOCK error (debug interrupt?) for reason 64 on CPU 0.
+[62438.586517] dmar: DRHD: handling fault status reg 302
+[62438.586521] dmar: DMAR:[DMA Read] Request device [05:00.1] fault addr 100c457000
+DMAR:[fault reason 06] PTE Read access is not set
+[62438.613921] CPU: 0 PID: 0 Comm: swapper/0 Tainted: G           OE  ------------   3.10.0-327.22.2.el7.x8
+   
+分析代码，发现intel-iommu模块的DMAR会操作page的freelist字段，iommu如果有问题就有可能破坏freelist，从而破坏slub结构，引起这个故障。 
+而intel-iommu存在已知的bug。
+所以这个故障，不要设置intel_iommu=on iommu=pt, 而改为iommu=off 或者 iommu=soft先规避。
+
+
+
+ 
