@@ -1,0 +1,145 @@
+向redhat提交bug：
+Description of problem:
+[  165.169839] vfio-pci 0000:81:1f.3: irq 58 for MSI/MSI-X
+[  186.534245] ixgbe 0000:81:00.0: Set MAC fa:16:3e:30:51:8d msg received from VF 61
+[  186.539446] vfio-pci 0000:81:1f.2: irq 57 for MSI/MSI-X
+[  186.539471] vfio-pci 0000:81:1f.2: irq 59 for MSI/MSI-X
+[  186.574829] ixgbe 0000:81:00.1: Set MAC fa:16:3e:30:51:8d msg received from VF 61
+[  186.575302] vfio-pci 0000:81:1f.3: irq 58 for MSI/MSI-X
+[  186.575324] vfio-pci 0000:81:1f.3: irq 60 for MSI/MSI-X
+[ 1179.904557] perf interrupt took too long (2522 > 2500), lowering kernel.perf_event_max_sample_rate to 50000
+[ 5137.690160] Kernel panic - not syncing: Watchdog detected hard LOCKUP on cpu 0
+[ 5137.699719] CPU: 0 PID: 1338 Comm: revalidator42 Tainted:......
+[ 5137.713483] Hardware name: ZTE EC600G3/XH20G2, BIOS UBF09.00.01_SVN0 01/19/2018
+[ 5137.723559] Call Trace:
+[ 5137.728199]  <NMI>  [<ffffffff8163f2ba>] dump_stack+0x19/0x1b
+[ 5137.736754]  [<ffffffff81638b26>] panic+0xd8/0x1e7
+[ 5137.744263]  [<ffffffff8111f260>] ? restart_watchdog_hrtimer+0x50/0x50
+[ 5137.753865]  [<ffffffff8111f322>] watchdog_overflow_callback+0xc2/0xd0
+[ 5137.763542]  [<ffffffff81162b11>] __perf_event_overflow+0xa1/0x250
+[ 5137.772843]  [<ffffffff811635e4>] perf_event_overflow+0x14/0x20
+[ 5137.781987]  [<ffffffff81033888>] intel_pmu_handle_irq+0x1e8/0x470
+[ 5137.791500]  [<ffffffff812fa291>] ? ioremap_page_range+0x241/0x320
+[ 5137.801021]  [<ffffffff811a99c1>] ? unmap_kernel_range_noflush+0x11/0x20
+[ 5137.811214]  [<ffffffff8139c9f4>] ? ghes_copy_tofrom_phys+0x124/0x210
+[ 5137.821259]  [<ffffffff8139cb80>] ? ghes_read_estatus+0xa0/0x190
+[ 5137.830798]  [<ffffffff8164a4bb>] perf_event_nmi_handler+0x2b/0x50
+[ 5137.840612]  [<ffffffff81649c09>] nmi_handle.isra.0+0x69/0xb0
+[ 5137.849997]  [<ffffffff81649db9>] do_nmi+0x169/0x340
+[ 5137.858554]  [<ffffffff81648ff9>] end_repeat_nmi+0x1e/0x7e
+[ 5137.867833]  [<ffffffff81646d72>] ? _raw_spin_lock+0x32/0x50
+[ 5137.877370]  [<ffffffff81646d72>] ? _raw_spin_lock+0x32/0x50
+[ 5137.886912]  [<ffffffff81646d72>] ? _raw_spin_lock+0x32/0x50
+[ 5137.896440]  <<EOE>>  [<ffffffff810bbdd2>] try_to_wake_up+0x192/0x300
+[ 5137.906949]  [<ffffffff812a31c6>] ? type_attribute_bounds_av.isra.10+0x66/0x2e0
+[ 5137.918537]  [<ffffffff810bbfb2>] default_wake_function+0x12/0x20
+[ 5137.928846]  [<ffffffff810aa148>] autoremove_wake_function+0x18/0x40
+[ 5137.939617]  [<ffffffff810b79a6>] ? finish_task_switch+0x56/0x170
+[ 5137.950082]  [<ffffffff810b2658>] __wake_up_common+0x58/0x90
+[ 5137.960228]  [<ffffffff810b43a9>] __wake_up+0x39/0x50
+[ 5137.969620]  [<ffffffff81127718>] __call_rcu_nocb_enqueue+0xa8/0xc0
+[ 5137.980577]  [<ffffffff81128548>] __call_rcu+0x1e8/0x2c0
+[ 5137.990397]  [<ffffffff8112863d>] call_rcu_sched+0x1d/0x20
+[ 5138.000468]  [<ffffffff8128d36b>] avc_node_delete+0x3b/0x50
+[ 5138.010806]  [<ffffffff8163e2f5>] avc_alloc_node+0xfe/0x125
+[ 5138.021092]  [<ffffffff8163e3b4>] avc_compute_av+0x98/0x1b5
+[ 5138.031509]  [<ffffffff8128d6d4>] avc_has_perm_noaudit+0xc4/0x110
+[ 5138.042472]  [<ffffffff81290f0b>] cred_has_capability+0x6b/0x120
+[ 5138.053402]  [<ffffffff810c1b3e>] ? account_entity_dequeue+0xae/0xd0
+[ 5138.064794]  [<ffffffff81290fee>] selinux_capable+0x2e/0x40
+[ 5138.075443]  [<ffffffff8128ac75>] security_capable_noaudit+0x15/0x20
+[ 5138.086988]  [<ffffffff8108b8f5>] has_ns_capability_noaudit+0x15/0x20
+[ 5138.098827]  [<ffffffff8108bbd5>] ptrace_has_cap+0x35/0x40
+[ 5138.109643]  [<ffffffff8108c661>] ___ptrace_may_access+0x71/0x1e0
+[ 5138.121193]  [<ffffffff8164430e>] __schedule+0x26e/0xa00
+[ 5138.131809]  [<ffffffff81644ac9>] schedule+0x29/0x70
+[ 5138.142219]  [<ffffffff810e6014>] futex_wait_queue_me+0xc4/0x120
+[ 5138.153747]  [<ffffffff810e6b89>] futex_wait+0x179/0x280
+[ 5138.164631]  [<ffffffff811ec32e>] ? pipe_read+0x38e/0x4c0
+[ 5138.175475]  [<ffffffff810e8c1e>] do_futex+0xfe/0x5b0
+[ 5138.185605]  [<ffffffff810e9150>] SyS_futex+0x80/0x180
+[ 5138.195784]  [<ffffffff816513fd>] system_call_fastpath+0x16/0x1b
+
+
+Version-Release number of selected component (if applicable):
+kernel-3.10.0-327.62.4.el7
+
+We have already analyzed the vmcore and founed It's may caused by this patch:
+
+https://access.redhat.com/labs/psb/versions/kernel-3.10.0-327.62.4.el7/patches/x86-x86-mm-Only-set-IBPB-when-the-new-thread-cannot-ptrace-current-thread
+
+This patch introduced  spec_ctrl_ibpb_if_different_creds:
++static inline void spec_ctrl_ibpb_if_different_creds(struct task_struct *next)
++{
++        struct task_struct *prev = current;
++
++        if (static_cpu_has(X86_FEATURE_IBPB_SUPPORT)) {
++                if (__this_cpu_read(spec_ctrl_pcp) & SPEC_CTRL_PCP_IBPB && next &&
++                    ___ptrace_may_access(next, NULL, prev, PTRACE_MODE_IBPB))
++                        __spec_ctrl_ibpb();
+         }
+ }
+
+The  backtrace is:
+
+ #4 [ffff88044171f5e0] _raw_spin_lock at ffffffff81646d77
+ #5 [ffff88044171f5e8] try_to_wake_up at ffffffff810bbdd2
+ #6 [ffff88044171f630] default_wake_function at ffffffff810bbfb2
+ #7 [ffff88044171f640] autoremove_wake_function at ffffffff810aa148
+ #8 [ffff88044171f668] __wake_up_common at ffffffff810b2658
+ #9 [ffff88044171f6b0] __wake_up at ffffffff810b43a9
+#10 [ffff88044171f6e8] __call_rcu_nocb_enqueue at ffffffff81127718
+#11 [ffff88044171f700] __call_rcu at ffffffff81128548
+#12 [ffff88044171f738] call_rcu_sched at ffffffff8112863d
+#13 [ffff88044171f748] avc_node_delete at ffffffff8128d36b
+#14 [ffff88044171f758] avc_alloc_node at ffffffff8163e2f5
+#15 [ffff88044171f798] avc_compute_av at ffffffff8163e3b4
+#16 [ffff88044171f7e8] avc_has_perm_noaudit at ffffffff8128d6d4
+#17 [ffff88044171f830] cred_has_capability at ffffffff81290f0b
+#18 [ffff88044171f8b8] selinux_capable at ffffffff81290fee
+#19 [ffff88044171f8e0] security_capable_noaudit at ffffffff8128ac75
+#20 [ffff88044171f8f0] has_ns_capability_noaudit at ffffffff8108b8f5
+#21 [ffff88044171f900] ptrace_has_cap at ffffffff8108bbd5
+#22 [ffff88044171f910] ___ptrace_may_access at ffffffff8108c661
+#23 [ffff88044171f940] __schedule at ffffffff8164430e
+#24 [ffff88044171f9c8] schedule at ffffffff81644ac9
+#25 [ffff88044171f9d8] schedule_hrtimeout_range_clock at ffffffff81643ae2
+#26 [ffff88044171fa70] schedule_hrtimeout_range at ffffffff81643b93
+#27 [ffff88044171fa80] poll_schedule_timeout at ffffffff811f75d5
+#28 [ffff88044171fab0] do_sys_poll at ffffffff811f8b5d
+#29 [ffff88044171fed8] sys_ppoll at ffffffff811f8f63
+#30 [ffff88044171ff50] system_call_fastpath at ffffffff816513fd
+
+In __schedule function:
+static void __sched __schedule(void)
+{
+...
+      raw_spin_lock_irq(&rq->lock);------> Acquired rq->lock
+...
+	if (likely(prev != next)) {
+		rq->nr_switches++;
+		rq->curr = next;
+		++*switch_count;
+
+		context_switch(rq, prev, next); /* unlocks the rq */
+...
+	} else
+		raw_spin_unlock_irq(&rq->lock);
+...
+}
+
+The following stack:
+ context_switch -> switch_mm->___ptrace_may_access->ptrace_has_cap->......->try_to_wake_up -> ttwu_queue 
+
+will try to acquire rq->lock again:
+
+static void ttwu_queue(struct task_struct *p, int cpu)
+{
+...
+	raw_spin_lock(&rq->lock);
+	ttwu_do_activate(rq, p, 0);
+	raw_spin_unlock(&rq->lock);
+...
+}
+
+So it may reproduce the problem.
