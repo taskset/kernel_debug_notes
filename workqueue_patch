@@ -1,0 +1,30 @@
+第1版：
+https://mail-archive.com/linux-kernel@vger.kernel.org/msg1571926.html
+
+第2版：
+https://mail-archive.com/linux-kernel@vger.kernel.org/msg1572394.html
+
+第3版：
+https://mail-archive.com/linux-kernel@vger.kernel.org/msg1592876.html 
+
+这一版开始，内核的牛人Tejun Heo 有一些回复：
+The general approach looks good to me but this is way too big a patch. Can you please split it so that the following steps are separate?  * Rename system workqueues. * Expose attrs for system workqueues. * Rename unbound_attrs to attrs. * Convert ->nice to ->sched_attrs. * Add scheduling policy to the exposed attrs.
+
+第4版：
+针对他的建议，又修改了第四版：拆分为5个小补丁
+https://mail-archive.com/linux-kernel@vger.kernel.org/msg1594705.html
+
+krenel的Tejun Heo 有一些回复：
+On Thu, Jan 25, 2018 at 07:54:41AM -0800, Tejun Heo wrote: > On Thu, Jan 25, 2018 at 03:01:40PM +0800, Wen Yang wrote: > > Rename system_wq's wq->name from "events" to "system_percpu", > > and similarly for the similarly named workqueues. > >  > > Signed-off-by: Wen Yang <wen.yan...@zte.com.cn> > > Signed-off-by: Jiang Biao <jiang.bi...@zte.com.cn> > > Signed-off-by: Tan Hu <tan...@zte.com.cn> > > Suggested-by: Tejun Heo <t...@kernel.org> > > Cc: Tejun Heo <t...@kernel.org> > > Cc: Lai Jiangshan <jiangshan...@gmail.com> > > Cc: linux-kernel@vger.kernel.org >  > 
+
+The patches don't seem split right.  There are a number of chunks > which seem to be in the wrong patch.  Can you plesae go over each > patch and verify that they look, build and run okay?
+Just building the same tree structure for different hierarchies.  Just run tree(1) in /sys/fs/cgroup on a systemd cgroup1 system with some controllers enabled and look at the output.
+第二段话应该是其他问题，和这个补丁可能没有关系；
+针对第一段话，需要继续修改补丁。
+
+第5版：
+https://mail-archive.com/linux-kernel@vger.kernel.org/msg1596184.html
+kernel其他牛人也有一些回复了
+继续跟踪修改中
+
+
