@@ -1,0 +1,157 @@
+问题现象：
+
+[ 2039.378988] BUG: unable to handle kernel NULL pointer dereference at 0000000000000020
+[ 2039.379071] IP: [<ffffffffa02af6cc>] release_lock_stateid+0x1c/0x60 [nfsd]
+[ 2039.379155] PGD 0
+[ 2039.379176] Oops: 0000 [#1] SMP
+[ 2039.379210] Modules linked in: dm_mod iosf_mbi kvm_intel kvm cirrus drm_kms_helper irqbypass crc32_pclmul ghash_clmulni_intel syscopyarea aesni_intel sysfillrect sysimgblt lrw fb_sys_fops gf128mul ttm glue_helper ablk_helper cryptd ppdev drm i2c_piix4 parport_pc virtio_balloon i2c_core parport pcspkr nfsd auth_rpcgss nfs_acl lockd grace sunrpc ip_tables xfs libcrc32c ata_generic pata_acpi virtio_console virtio_net virtio_scsi virtio_blk crct10dif_pclmul crct10dif_common crc32c_intel serio_raw ata_piix libata virtio_pci virtio_ring virtio floppy
+[ 2039.379740] CPU: 0 PID: 1222 Comm: nfsd Not tainted 3.10.0-514.26.2.el7.x86_64 #1
+[ 2039.379807] Hardware name: Fedora Project OpenStack Nova, BIOS rel-1.8.2-0-g33fbe13 by qemu-project.org 04/01/2014
+[ 2039.379898] task: ffff88080545edd0 ti: ffff8800b9484000 task.ti: ffff8800b9484000
+[ 2039.379964] RIP: 0010:[<ffffffffa02af6cc>]  [<ffffffffa02af6cc>] release_lock_stateid+0x1c/0x60 [nfsd]
+[ 2039.380055] RSP: 0018:ffff8800b9487d48  EFLAGS: 00010246
+[ 2039.380102] RAX: ffff8807d5220dc0 RBX: ffff8807d878a840 RCX: ffff8800b9487fd8
+[ 2039.380165] RDX: 0000000000000000 RSI: ffff88005bfd6580 RDI: ffff8807d878a840
+[ 2039.380228] RBP: ffff8800b9487d60 R08: 0000000000000000 R09: ffff88080509c068
+[ 2039.380291] R10: 0000000000000000 R11: ffff88080509b220 R12: 0000000000000000
+[ 2039.380354] R13: ffff8807d878a8c8 R14: ffff88080509c1a8 R15: ffff88080509b000
+[ 2039.380417] FS:  0000000000000000(0000) GS:ffff88081f200000(0000) knlGS:0000000000000000
+[ 2039.380488] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[ 2039.380540] CR2: 0000000000000020 CR3: 00000004f36b6000 CR4: 00000000001406f0
+[ 2039.380606] DR0: 0000000000000000 DR1: 0000000000000000 DR2: 0000000000000000
+[ 2039.380676] DR3: 0000000000000000 DR6: 00000000ffff0ff0 DR7: 0000000000000400
+[ 2039.380739] Stack:
+[ 2039.380759]  ffff8807d878a840 0000000000000000 ffff8807d878a8c8 ffff8800b9487d88
+[ 2039.380831]  ffffffffa02b47fe ffff88080509c000 ffff8808051a2000 ffff88080509c068
+[ 2039.380902]  ffff8800b9487dd8 ffffffffa02a17bc ffff88080509b220 0000000000000870
+[ 2039.380974] Call Trace:
+[ 2039.381006]  [<ffffffffa02b47fe>] nfsd4_free_stateid+0x1be/0x1d0 [nfsd]
+[ 2039.381074]  [<ffffffffa02a17bc>] nfsd4_proc_compound+0x49c/0x790 [nfsd]
+[ 2039.381140]  [<ffffffffa028c713>] nfsd_dispatch+0xd3/0x280 [nfsd]
+[ 2039.381208]  [<ffffffffa024bea3>] svc_process_common+0x453/0x6f0 [sunrpc]
+[ 2039.381279]  [<ffffffffa024c24b>] svc_process+0x10b/0x1a0 [sunrpc]
+[ 2039.381341]  [<ffffffffa028c07f>] nfsd+0xdf/0x150 [nfsd]
+[ 2039.381394]  [<ffffffffa028bfa0>] ? nfsd_destroy+0x80/0x80 [nfsd]
+[ 2039.381452]  [<ffffffff810b0b6f>] kthread+0xcf/0xe0
+[ 2039.381498]  [<ffffffff810b0aa0>] ? kthread_create_on_node+0x140/0x140
+[ 2039.381558]  [<ffffffff81697a18>] ret_from_fork+0x58/0x90
+[ 2039.381608]  [<ffffffff810b0aa0>] ? kthread_create_on_node+0x140/0x140
+[ 2039.381673] Code: ff 5b 5d c3 90 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 55 48 89 e5 41 55 41 54 53 48 8b 87 80 00 00 00 48 89 fb 4c 8b 60 68 <49> 8b 44 24 20 48 8d b8 40 03 00 00 e8 43 f6 3d e1 48 89 df e8
+[ 2039.381965] RIP  [<ffffffffa02af6cc>] release_lock_stateid+0x1c/0x60 [nfsd]
+[ 2039.382038]  RSP <ffff8800b9487d48>
+[ 2039.382070] CR2: 0000000000000020
+crash>
+
+分析：
+1，堆栈信息：
+#7 [ffff8800b9487bd8] __do_page_fault at ffffffff8169310e
+ #8 [ffff8800b9487c38] trace_do_page_fault at ffffffff81693366
+ #9 [ffff8800b9487c78] do_async_page_fault at ffffffff81692a0b
+#10 [ffff8800b9487c90] async_page_fault at ffffffff8168f4f8
+    [exception RIP: release_lock_stateid+28]
+    RIP: ffffffffa02af6cc  RSP: ffff8800b9487d48  RFLAGS: 00010246
+    RAX: ffff8807d5220dc0  RBX: ffff8807d878a840  RCX: ffff8800b9487fd8
+    RDX: 0000000000000000  RSI: ffff88005bfd6580  RDI: ffff8807d878a840
+    RBP: ffff8800b9487d60   R8: 0000000000000000   R9: ffff88080509c068
+    R10: 0000000000000000  R11: ffff88080509b220  R12: 0000000000000000
+    R13: ffff8807d878a8c8  R14: ffff88080509c1a8  R15: ffff88080509b000
+    ORIG_RAX: ffffffffffffffff  CS: 0010  SS: 0018
+#11 [ffff8800b9487d68] nfsd4_free_stateid at ffffffffa02b47fe [nfsd]
+#12 [ffff8800b9487d90] nfsd4_proc_compound at ffffffffa02a17bc [nfsd]
+#13 [ffff8800b9487de0] nfsd_dispatch at ffffffffa028c713 [nfsd]
+#14 [ffff8800b9487e18] svc_process_common at ffffffffa024bea3 [sunrpc]
+#15 [ffff8800b9487e78] svc_process at ffffffffa024c24b [sunrpc]
+#16 [ffff8800b9487ea0] nfsd at ffffffffa028c07f [nfsd]
+#17 [ffff8800b9487ec8] kthread at ffffffff810b0b6f
+#18 [ffff8800b9487f50] ret_from_fork at ffffffff81697a18
+
+2， 反汇编release_lock_stateid
+crash> dis -l ffffffffa02af6cc
+/usr/src/debug/kernel-3.10.0-514.26.2.el7/linux-3.10.0-514.26.2.el7.x86_64/include/linux/spinlock.h: 296
+0xffffffffa02af6cc <release_lock_stateid+28>:   mov    0x20(%r12),%rax
+
+crash> dis -l  release_lock_stateid
+/usr/src/debug/kernel-3.10.0-514.26.2.el7/linux-3.10.0-514.26.2.el7.x86_64/fs/nfsd/nfs4state.c: 1155
+0xffffffffa02af6b0 <release_lock_stateid>:      nopl   0x0(%rax,%rax,1) [FTRACE NOP]
+0xffffffffa02af6b5 <release_lock_stateid+5>:    push   %rbp
+0xffffffffa02af6b6 <release_lock_stateid+6>:    mov    %rsp,%rbp
+0xffffffffa02af6b9 <release_lock_stateid+9>:    push   %r13
+0xffffffffa02af6bb <release_lock_stateid+11>:   push   %r12
+0xffffffffa02af6bd <release_lock_stateid+13>:   push   %rbx
+/usr/src/debug/kernel-3.10.0-514.26.2.el7/linux-3.10.0-514.26.2.el7.x86_64/fs/nfsd/nfs4state.c: 1156
+0xffffffffa02af6be <release_lock_stateid+14>:   mov    0x80(%rdi),%rax
+/usr/src/debug/kernel-3.10.0-514.26.2.el7/linux-3.10.0-514.26.2.el7.x86_64/fs/nfsd/nfs4state.c: 1155
+0xffffffffa02af6c5 <release_lock_stateid+21>:   mov    %rdi,%rbx
+/usr/src/debug/kernel-3.10.0-514.26.2.el7/linux-3.10.0-514.26.2.el7.x86_64/fs/nfsd/nfs4state.c: 1156
+0xffffffffa02af6c8 <release_lock_stateid+24>:   mov    0x68(%rax),%r12
+/usr/src/debug/kernel-3.10.0-514.26.2.el7/linux-3.10.0-514.26.2.el7.x86_64/include/linux/spinlock.h: 296
+0xffffffffa02af6cc <release_lock_stateid+28>:   mov    0x20(%r12),%rax
+0xffffffffa02af6d1 <release_lock_stateid+33>:   lea    0x340(%rax),%rdi
+0xffffffffa02af6d8 <release_lock_stateid+40>:   callq  0xffffffff8168ed20 <_raw_spin_lock>
+/usr/src/debug/kernel-3.10.0-514.26.2.el7/linux-3.10.0-514.26.2.el7.x86_64/fs/nfsd/nfs4state.c: 1160
+0xffffffffa02af6dd <release_lock_stateid+45>:   mov    %rbx,%rdi
+0xffffffffa02af6e0 <release_lock_stateid+48>:   callq  0xffffffffa02ac690 <unhash_lock_stateid>
+/usr/src/debug/kernel-3.10.0-514.26.2.el7/linux-3.10.0-514.26.2.el7.x86_64/include/linux/spinlock.h: 341
+0xffffffffa02af6e5 <release_lock_stateid+53>:   mov    0x20(%r12),%rdi
+/usr/src/debug/kernel-3.10.0-514.26.2.el7/linux-3.10.0-514.26.2.el7.x86_64/fs/nfsd/nfs4state.c: 1160
+0xffffffffa02af6ea <release_lock_stateid+58>:   mov    %eax,%r13d
+/usr/src/debug/kernel-3.10.0-514.26.2.el7/linux-3.10.0-514.26.2.el7.x86_64/include/linux/spinlock.h: 341
+0xffffffffa02af6ed <release_lock_stateid+61>:   add    $0x340,%rdi
+0xffffffffa02af6f4 <release_lock_stateid+68>:   callq  0xffffffff8168ec50 <_raw_spin_unlock>
+/usr/src/debug/kernel-3.10.0-514.26.2.el7/linux-3.10.0-514.26.2.el7.x86_64/fs/nfsd/nfs4state.c: 1162
+0xffffffffa02af6f9 <release_lock_stateid+73>:   test   %r13b,%r13b
+0xffffffffa02af6fc <release_lock_stateid+76>:   je     0xffffffffa02af706 <release_lock_stateid+86>
+/usr/src/debug/kernel-3.10.0-514.26.2.el7/linux-3.10.0-514.26.2.el7.x86_64/fs/nfsd/nfs4state.c: 1163
+0xffffffffa02af6fe <release_lock_stateid+78>:   mov    %rbx,%rdi
+0xffffffffa02af701 <release_lock_stateid+81>:   callq  0xffffffffa02af270 <nfs4_put_stid>
+/usr/src/debug/kernel-3.10.0-514.26.2.el7/linux-3.10.0-514.26.2.el7.x86_64/fs/nfsd/nfs4state.c: 1164
+0xffffffffa02af706 <release_lock_stateid+86>:   pop    %rbx
+0xffffffffa02af707 <release_lock_stateid+87>:   pop    %r12
+0xffffffffa02af709 <release_lock_stateid+89>:   pop    %r13
+0xffffffffa02af70b <release_lock_stateid+91>:   pop    %rbp
+0xffffffffa02af70c <release_lock_stateid+92>:   retq
+crash>
+
+3，重点关注0x68：
+/usr/src/debug/kernel-3.10.0-514.26.2.el7/linux-3.10.0-514.26.2.el7.x86_64/fs/nfsd/nfs4state.c: 1156
+0xffffffffa02af6c8 <release_lock_stateid+24>:   mov    0x68(%rax),%r12
+
+crash> struct -xo nfs4_ol_stateid
+struct nfs4_ol_stateid {
+   [0x0] struct nfs4_stid st_stid;
+  [0x38] struct list_head st_perfile;
+  [0x48] struct list_head st_perstateowner;
+  [0x58] struct list_head st_locks;
+  [0x68] struct nfs4_stateowner *st_stateowner;
+  [0x70] struct nfs4_clnt_odstate *st_clnt_odstate;
+  [0x78] unsigned char st_access_bmap;
+  [0x79] unsigned char st_deny_bmap;
+  [0x80] struct nfs4_ol_stateid *st_openstp;
+  [0x88] struct mutex st_mutex;
+}
+SIZE: 0xb0
+
+解析偏移量0x68 对应的数据为st_stateowner：
+crash> nfs4_ol_stateid.st_stateowner      ffff8807d5220dc0
+  st_stateowner = 0xffff8803b9fdf900
+  
+
+但是ffff8807d5220dc0已经分配给blkdev_requests了:
+crash> kmem 0xffff8803b9fdf900
+CACHE            NAME                 OBJSIZE  ALLOCATED     TOTAL  SLABS  SSIZE
+ffff88017fc61a00 blkdev_requests          384      33550     36036    858    16k
+  SLAB              MEMORY            NODE  TOTAL  ALLOCATED  FREE
+  ffffea000ee7f700  ffff8803b9fdc000     0     42         20    22
+  FREE / [ALLOCATED]
+  [ffff8803b9fdf900]
+
+      PAGE        PHYSICAL      MAPPING       INDEX CNT FLAGS
+ffffea000ee7f7c0 3b9fdf000                0        0  0 2fffff00008000 tail
+crash>
+
+说明nfs4_ol_stateid 里面的st_stateowner已经被回收，分配给其他地方使用了。
+
+4，补丁：
+经分析代码开源已经修复了：
+https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit?&id=f46c445b79906a9da55c13e0a6f6b6a006b892fe
+
