@@ -1,0 +1,117 @@
+遇到问题：
+
+实时内核中， ip_send_unicast_reply 之后的流程发生panic：
+
+[7757947.395000] docker0: port 11(veth4ca5c19) entered forwarding state
+[7757947.551648] nf_conntrack: falling back to vmalloc.
+[7757947.553350] nf_conntrack: falling back to vmalloc.
+[7757947.622674] IPv6: ADDRCONF(NETDEV_CHANGE): veth4ca5c19: link becomes ready
+[7757962.447120] docker0: port 11(veth4ca5c19) entered forwarding state
+[7782080.531968] BUG: unable to handle kernel NULL pointer dereference at 0000000000000020
+[7782080.531974] IP: [<ffffffff815af80a>] __ip_make_skb+0x16a/0x420
+[7782080.531976] PGD 7863ea067 PUD 115bb9067 PMD 0
+[7782080.531978] Oops: 0000 [#1] PREEMPT SMP
+[7782080.532009] Modules linked in: binfmt_misc veth xt_nat ipt_MASQUERADE nf_nat_masquerade_ipv4 iptable_nat nf_conntrack_ipv4 nf_defrag_ipv4 nf_nat_ipv4 xt_addrtype iptable_filter xt_conntrack nf_nat nf_conntrack br_netfilter bridge stp llc overlay(T) ext4 mbcache jbd2 ppdev intel_powerclamp iosf_mbi crc32_pclmul ghash_clmulni_intel cirrus aesni_intel snd_pcm lrw ttm gf128mul snd_timer glue_helper drm_kms_helper snd syscopyarea ablk_helper soundcore sysfillrect parport_pc sysimgblt cryptd fb_sys_fops pcspkr parport virtio_balloon drm i2c_piix4 i2c_core nfsd auth_rpcgss nfs_acl lockd grace sunrpc ip_tables xfs libcrc32c virtio_scsi virtio_blk ata_generic virtio_net pata_acpi crct10dif_pclmul crct10dif_common crc32c_intel serio_raw ata_piix virtio_pci libata floppy dm_mirror dm_region_hash dm_log dm_mod
+[7782080.532010]
+[7782080.532015] CPU: 2 PID: 26003 Comm: oamfmsrv Tainted: G        W      ------------ T 3.10.0-514.6.1.rt56.429.el7.x86_64 #1
+[7782080.532016] Hardware name: Fedora Project OpenStack Nova, BIOS rel-1.8.2-0-g33fbe13 by qemu-project.org 04/01/2014
+[7782080.532017] task: ffff88005ed950a0 ti: ffff88078292c000 task.ti: ffff88078292c000
+[7782080.532020] RIP: 0010:[<ffffffff815af80a>]  [<ffffffff815af80a>] __ip_make_skb+0x16a/0x420
+[7782080.532021] RSP: 0018:ffff88078292fb88  EFLAGS: 00010282
+[7782080.532022] RAX: 00000000ffffffff RBX: ffff880115b05f00 RCX: 0000000000000040
+[7782080.532023] RDX: 0000000000000001 RSI: ffff88078292fc70 RDI: ffff880004b1a010
+[7782080.532024] RBP: ffff88078292fbc0 R08: 00000000000000c0 R09: ffff8807882adb00
+[7782080.532024] R10: 0000000000000000 R11: 0000000000000000 R12: ffff8800033e3bd0
+[7782080.532025] R13: ffff8800033e3700 R14: 0000000000000000 R15: 0000000000000028
+[7782080.532027] FS:  00007f6ccb5bd700(0000) GS:ffff8807bfd00000(0000) knlGS:0000000000000000
+[7782080.532028] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[7782080.532029] CR2: 0000000000000020 CR3: 000000059ba55000 CR4: 00000000001406e0
+[7782080.532032] DR0: 0000000000000000 DR1: 0000000000000000 DR2: 0000000000000000
+[7782080.532033] DR3: 0000000000000000 DR6: 00000000ffff0ff0 DR7: 0000000000000400
+[7782080.532033] Stack:
+[7782080.532035]  0000000000000000 ffff880700000040 ffff8800033e3700 ffff8800033e3700
+[7782080.532037]  ffff88078292fd10 ffff8807882adb00 000000000c0011ac ffff88078292fbd8
+[7782080.532039]  ffffffff815afb30 ffff880796b68200 ffff88078292fce8 ffffffff815aff28
+[7782080.532039] Call Trace:
+[7782080.532043]  [<ffffffff815afb30>] ip_push_pending_frames+0x20/0x40
+[7782080.532046]  [<ffffffff815aff28>] ip_send_unicast_reply+0x268/0x2c0
+[7782080.532048]  [<ffffffff815cddb0>] ? tcp_v4_destroy_sock+0x250/0x2b0
+[7782080.532050]  [<ffffffff815ce133>] tcp_v4_send_reset+0x323/0x470
+[7782080.532052]  [<ffffffff815ce40e>] tcp_v4_do_rcv+0x18e/0x360
+[7782080.532055]  [<ffffffff810b7deb>] ? migrate_disable+0xab/0xf0
+[7782080.532059]  [<ffffffff8154f179>] release_sock+0xa9/0x180
+[7782080.532061]  [<ffffffff815baf2a>] tcp_close+0xaa/0x410
+[7782080.532064]  [<ffffffff815e47cb>] inet_release+0x6b/0x90
+[7782080.532066]  [<ffffffff8154a2af>] sock_release+0x1f/0x80
+[7782080.532068]  [<ffffffff8154a322>] sock_close+0x12/0x20
+[7782080.532071]  [<ffffffff811f4618>] __fput+0xd8/0x250
+[7782080.532073]  [<ffffffff811f487e>] ____fput+0xe/0x10
+[7782080.532077]  [<ffffffff810a2467>] task_work_run+0xa7/0xe0
+[7782080.532080]  [<ffffffff8101ae2e>] do_notify_resume+0xae/0x100
+[7782080.532083]  [<ffffffff8168fd41>] int_signal+0x12/0x17
+[7782080.532103] Code: 76 05 3c 05 0f 94 c2 0f b6 43 7c b9 40 00 00 00 83 e0 fe 09 d0 88 43 7c 41 0f b6 85 b7 04 00 00 83 e8 02 3c 01 76 42 44 8b 7b 68 <49> 8b 46 20 4c 89 f7 48 89 75 c8 4c 89 4d d0 ff 50 20 31 c9 41
+[7782080.532106] RIP  [<ffffffff815af80a>] __ip_make_skb+0x16a/0x420
+[7782080.532106]  RSP <ffff88078292fb88>
+[7782080.532107] CR2: 0000000000000020
+
+
+crash> bt
+PID: 26003  TASK: ffff88005ed950a0  CPU: 2   COMMAND: "oamfmsrv"
+ #0 [ffff88078292f7e8] machine_kexec at ffffffff8104ca42
+ #1 [ffff88078292f848] __crash_kexec at ffffffff810fc3f2
+ #2 [ffff88078292f918] crash_kexec at ffffffff810fc4e0
+ #3 [ffff88078292f930] oops_end at ffffffff81688e00
+ #4 [ffff88078292f958] no_context at ffffffff8167ae26
+ #5 [ffff88078292f9a8] __bad_area_nosemaphore at ffffffff8167aec0
+ #6 [ffff88078292f9f0] bad_area at ffffffff8167b1ea
+ #7 [ffff88078292fa18] __do_page_fault at ffffffff8168b7b7
+ #8 [ffff88078292fa78] trace_do_page_fault at ffffffff8168b9d2
+ #9 [ffff88078292fab8] do_async_page_fault at ffffffff8168af8b
+#10 [ffff88078292fad0] async_page_fault at ffffffff81687ee8
+    [exception RIP: __ip_make_skb+362]
+    RIP: ffffffff815af80a  RSP: ffff88078292fb88  RFLAGS: 00010282
+    RAX: 00000000ffffffff  RBX: ffff880115b05f00  RCX: 0000000000000040
+    RDX: 0000000000000001  RSI: ffff88078292fc70  RDI: ffff880004b1a010
+    RBP: ffff88078292fbc0   R8: 00000000000000c0   R9: ffff8807882adb00
+    R10: 0000000000000000  R11: 0000000000000000  R12: ffff8800033e3bd0
+    R13: ffff8800033e3700  R14: 0000000000000000  R15: 0000000000000028
+    ORIG_RAX: ffffffffffffffff  CS: 0010  SS: 0018
+#11 [ffff88078292fbc8] ip_push_pending_frames at ffffffff815afb30
+#12 [ffff88078292fbe0] ip_send_unicast_reply at ffffffff815aff28
+#13 [ffff88078292fcf0] tcp_v4_send_reset at ffffffff815ce133
+#14 [ffff88078292fdb0] tcp_v4_do_rcv at ffffffff815ce40e
+#15 [ffff88078292fdf8] release_sock at ffffffff8154f179
+#16 [ffff88078292fe28] tcp_close at ffffffff815baf2a
+#17 [ffff88078292fe58] inet_release at ffffffff815e47cb
+#18 [ffff88078292fe78] sock_release at ffffffff8154a2af
+#19 [ffff88078292fe98] sock_close at ffffffff8154a322
+#20 [ffff88078292fea8] __fput at ffffffff811f4618
+#21 [ffff88078292fee8] ____fput at ffffffff811f487e
+#22 [ffff88078292fef8] task_work_run at ffffffff810a2467
+#23 [ffff88078292ff28] do_notify_resume at ffffffff8101ae2e
+#24 [ffff88078292ff50] int_signal at ffffffff8168fd41
+    RIP: 00007f6cd7cfa28d  RSP: 00007f6ccb5bc150  RFLAGS: 00000293
+    RAX: 0000000000000000  RBX: 00000000014af980  RCX: ffffffffffffffff
+    RDX: 0000000000001663  RSI: 0000000000eed238  RDI: 0000000000000007
+    RBP: 00000000014db280   R8: 0000000000e61000   R9: 0000000000000000
+    R10: 0000000000000000  R11: 0000000000000293  R12: 00007f6cd6f763e0
+    R13: 00007f6ccb5bc490  R14: 00007f6ccb5bc585  R15: 00007f6ccb5bc48f
+    ORIG_RAX: 0000000000000003  CS: 0033  SS: 002b
+crash>
+
+
+经查找资料，发现和redhat已有这样的故障单：
+https://bugzilla.redhat.com/show_bug.cgi?id=1430353
+https://bugzilla.redhat.com/attachment.cgi?id=1261316
+
+Some time ago Sami Pietik盲inen reported a crash on -RT in
+ip_send_unicast_reply() which was later fixed by Nicholas Mc Guire
+(v3.12.8-rt11). Later (v3.18.8) the code was reworked and I dropped the
+patch. As it turns out it was mistake.
+I have reports that the same crash is possible with a similar backtrace.
+It seems that vanilla protects access to this_cpu_ptr() via
+local_bh_disable(). This does not work the on -RT since we can have
+NET_RX and NET_TX running in parallel on the same CPU.
+
+net_rx和net_tx在同一个cpu上并行执行引起的问题，代码还没有理解清楚，记录一下，待后继分析
+
