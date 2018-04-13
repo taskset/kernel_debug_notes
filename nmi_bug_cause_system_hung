@@ -1,0 +1,63 @@
+1， 问题现象
+先用isolcpus启动参数把大部分cpu都隔离出去，只给系统留2个核；
+然后用测试仪大压力灌包
+
+一段时间之后，串口打印：
+[  625.651015] BUG: soft lockup - CPU#0 stuck for 23s! [rcuos/28:95]
+[  653.635478] BUG: soft lockup - CPU#0 stuck for 22s! [rcuos/28:95]
+[  625.651015] BUG: soft lockup - CPU#0 stuck for 23s! [rcuos/28:95]
+[  653.635478] BUG: soft lockup - CPU#0 stuck for 22s! [rcuos/28:95]
+[  705.606626] BUG: soft lockup - CPU#0 stuck for 21s! [rcuos/28:95]
+[  705.606626] BUG: soft lockup - CPU#0 stuck for 21s! [rcuos/28:95]
+[  769.571111] BUG: soft lockup - CPU#0 stuck for 23s! [rcuos/28:95]
+[  769.571111] BUG: soft lockup - CPU#0 stuck for 23s! [rcuos/28:95]
+[  809.548914] BUG: soft lockup - CPU#0 stuck for 23s! [rcuos/28:95]
+[  837.533378] BUG: soft lockup - CPU#0 stuck for 23s! [rcuos/28:95]
+[  844.763362] INFO: rcu_sched self-detected stall on CPU
+[  844.764362] INFO: rcu_sched detected stalls on CPUs/tasks:
+
+
+整个机器挂死，ping不通，键盘都无响应
+
+
+2，问题分析
+
+根据最后的两行日志分析代码：
+
+	printk(KERN_ERR "INFO: %s self-detected stall on CPU", rsp->name);
+	print_cpu_stall_info_begin();
+	print_cpu_stall_info(rsp, smp_processor_id());
+	print_cpu_stall_info_end();
+	for_each_possible_cpu(cpu)
+		totqlen += per_cpu_ptr(rsp->rda, cpu)->qlen;
+	pr_cont(" (t=%lu jiffies g=%lu c=%lu q=%lu)\n",
+		jiffies - rsp->gp_start, rsp->gpnum, rsp->completed, totqlen);
+	if (!trigger_all_cpu_backtrace())
+		dump_stack();
+
+后面的trigger_all_cpu_backtrace应该触发NMI中断，在NMI中断上下文中打印每一个cpu的堆栈了，但是却没有打印出来。
+怀疑是NMI处理有问题，把系统都锁死了。
+问题现象：键盘无响应、nmi watchdog 也检测不到异常， 和这个分析也可以吻合。
+
+继续分析代码，
+
+灌包死锁问题：NMI在频繁打印的时候，可能死锁，导致系统挂死，这个补丁解决这个问题：
+[x86] nmi: Perform a safe NMI stack trace on all CPUs (Jerry Snitselaar)[1346176][1069217]
+
+这两个是上面补丁的前置依赖：
+[kernel] printk: Add per_cpu printk func to allow printk to be diverted (Jerry Snitselaar)[1346176][1069217]
+[lib] seq: Add minimal support for seq_buf (Jerry Snitselaar)[1346176][1069217]
+
+修复nmi打印中的空指针错误：
+[x86] nmi: Fix use of unallocated cpumask_var_t (Jerry Snitselaar)[1346176][1069217]
+
+NMI中断会打印stack的所有原始地址信息，但是这时候可能内核的sp指针还没有正确的加载。
+业务这种频繁rcu触发nmi打印的场景，会有这种问题
+[x86] x86/dumpstack: Remove raw stack dump (Josh Poimboeuf){CVE-2017-5715}
+
+
+
+
+
+	
+	
