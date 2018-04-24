@@ -1,0 +1,140 @@
+1，问题现象
+业务程序的tty操作一直挂住，无法响应。
+
+2，分析
+
+先获取tty操作堵塞时的文件描述符：
+[root@localhost task]# strace -p 4513
+Process 4513 attached - interrupt to quit
+write(5, "\n          *********************"..., 200^C <unfinished ...>
+Process 4513 detached
+
+再获取文件描述符对应的pts是什么：
+root@localhost task]# cd /proc/4485/task/4513/fd
+[root@localhost fd]# ll
+total 0
+lr-x------ 1 root root 64 Apr 23 08:07 0 -> /dev/null
+lrwx------ 1 root root 64 Apr 23 08:07 1 -> /dev/console
+lrwx------ 1 root root 64 Apr 23 08:07 10 -> /dev/ptmx
+lrwx------ 1 root root 64 Apr 23 08:07 11 -> /dev/ptmx
+lrwx------ 1 root root 64 Apr 23 08:07 12 -> /dev/ptmx
+lrwx------ 1 root root 64 Apr 23 08:07 13 -> /dev/ptmx
+lrwx------ 1 root root 64 Apr 23 08:07 14 -> /dev/ptmx
+lrwx------ 1 root root 64 Apr 23 08:07 15 -> /dev/ptmx
+lrwx------ 1 root root 64 Apr 23 08:07 16 -> /dev/ptmx
+lrwx------ 1 root root 64 Apr 23 08:07 17 -> /dev/ptmx
+lrwx------ 1 root root 64 Apr 23 08:07 18 -> /dev/ptmx
+lrwx------ 1 root root 64 Apr 23 08:07 19 -> /dev/ptmx
+lrwx------ 1 root root 64 Apr 23 08:07 2 -> /dev/console
+lrwx------ 1 root root 64 Apr 23 08:07 20 -> /dev/ptmx
+lrwx------ 1 root root 64 Apr 23 08:07 21 -> /dev/ptmx
+lrwx------ 1 root root 64 Apr 23 08:07 22 -> /dev/ptmx
+lrwx------ 1 root root 64 Apr 23 08:07 23 -> /dev/ptmx
+lrwx------ 1 root root 64 Apr 23 08:07 24 -> /dev/ptmx
+lrwx------ 1 root root 64 Apr 23 08:07 25 -> /dev/ptmx
+lrwx------ 1 root root 64 Apr 23 08:07 3 -> /dev/ptmx
+lrwx------ 1 root root 64 Apr 23 08:07 4 -> socket:[20293]
+lrwx------ 1 root root 64 Apr 23 08:07 5 -> /dev/pts/1
+lrwx------ 1 root root 64 Apr 23 08:07 6 -> socket:[20311]
+lrwx------ 1 root root 64 Apr 23 08:07 8 -> /dev/ptmx
+lrwx------ 1 root root 64 Apr 23 08:07 9 -> /dev/ptmx
+
+可以看到是pts1
+
+上传内核的debuginfo，在线用crash调试分析tty_struct数据结构：
+  termios = 0xffff880c5bd8a240,
+  termios_locked = 0xffff880c5bd8a26c,
+  termiox = 0x0,
+  name = "pts1\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000
+\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000",
+  pgrp = 0x0,
+  session = 0x0,
+  flags = 2561,
+  count = 2,
+  winsize = {
+    ws_row = 49,
+    ws_col = 177,
+    ws_xpixel = 0,
+    ws_ypixel = 0
+  },
+  stopped = 1 '\001',
+  hw_stopped = 0 '\000',
+  flow_stopped = 0 '\000',
+  packet = 0 '\000',
+  low_latency = 0 '\000',
+  warned = 0 '\000',
+  ctrl_status = 0 '\000',
+
+
+stopped被设置为1了。
+
+分析代码，在键盘处理函数中，本地键盘按下ScrollLock键时，有可能会出现这种情况：
+ 481 static void fn_hold(struct vc_data *vc)
+ 482 {
+ 483     struct tty_struct *tty = vc->vc_tty;
+ 484
+ 485     if (rep || !tty)
+ 486         return;
+ 487
+ 488     /*
+ 489      * Note: SCROLLOCK will be set (cleared) by stop_tty (start_tty);
+ 490      * these routines are also activated by ^S/^Q.
+ 491      * (And SCROLLOCK can also be set by the ioctl KDSKBLED.)
+ 492      */
+ 493     if (tty->stopped)
+ 494         start_tty(tty);
+ 495     else
+ 496         stop_tty(tty);
+ 497 }
+
+属于tty的使用上的问题。
+再查了一下资料，如果没有内核的调试信息，还可以通过tty_ioctl来确认这个问题。
+http://www.man7.org/linux/man-pages/man4/tty_ioctl.4.html
+通过ioctl的返回值确认：
+TIOCPKT_STOP        Output to the terminal is stopped.
+
+
+3，规避方法
+分析代码：
+int n_tty_ioctl_helper(struct tty_struct *tty, struct file *file,
+               unsigned int cmd, unsigned long arg)
+{
+    unsigned long flags;
+    int retval;
+
+    switch (cmd) {
+    case TCXONC:
+        retval = tty_check_change(tty);
+        if (retval)
+            return retval;
+        switch (arg) {
+        case TCOOFF:
+            if (!tty->flow_stopped) {
+                tty->flow_stopped = 1;
+                stop_tty(tty);
+            }
+            break;
+        case TCOON:
+            if (tty->flow_stopped) {
+                tty->flow_stopped = 0;
+                start_tty(tty);
+            }
+            break;
+        case TCIOFF:
+            if (STOP_CHAR(tty) != __DISABLED_CHAR)
+                return send_prio_char(tty, STOP_CHAR(tty));
+            break;
+        case TCION:
+            if (START_CHAR(tty) != __DISABLED_CHAR)
+                return send_prio_char(tty, START_CHAR(tty));
+            break;
+        default:
+            return -EINVAL;
+        }
+
+内核代码看， TCOOF 会停止tty，  TCOON 会开启tty。
+所以无论flow_stopped是什么值（这里是0），都可以用tcflow先停止流控、再开启流控，这样可以规避这个问题。
+
+
+
+
