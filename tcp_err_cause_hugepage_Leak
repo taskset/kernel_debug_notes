@@ -1,0 +1,370 @@
+问题现象：
+反复创建、删除虚机。然后巨页就越变越少。可能删除虚机时存在残留。
+
+分析过程比较曲折，记录如下：
+1，收集虚拟机已经关闭、但是巨页没有释放的时候的vmcore，进行分析：
+
+p hstates，找到激活的巨页链表hugepage_activelist；
+然后解析链表，获取页面的引用计数：
+crash> list -o 0x20 -s page.flags,mapping,_count,index -x  -H   0xffffea006f000020
+ffffea0066000000
+  flags = 0x2fffff00004004
+  mapping = 0x0
+  _count = {
+    counter = 0x64
+  }
+  index = 0x11,
+ffffea00e6000000
+  flags = 0x6fffff00004004
+  mapping = 0x0
+  _count = {
+    counter = 0xe0
+  }
+  index = 0x11,
+ffffea00d4000000
+  flags = 0x6fffff00004004
+  mapping = 0x0
+  _count = {
+    counter = 0x160
+  }
+  
+ 发现巨页的引用计数不为0，所以无法释放。但vmcore是事后的现场了，无法分析是哪里导致的巨页引用计数泄露;
+
+2，写systemtap脚本，在申请巨页/释放巨页的地方打点，因为get_page/put_page是内核的热点函数，使用的地方非常频繁，
+     打印信息也会非常频繁，几十秒钟就是几百兆日志，无法分析；
+	 
+3，尝试从高版本反向移植page_owner功能，依赖补丁太多，工作量很大，失败；
+
+4，尝试参考slub的debug功能，移植代码，在get_page/put_page的时候，保持堆栈地址，开发了调试补丁；
+[root@localhost SOURCES]# cat trace_hugepages.patch
+diff --git a/mm/hugetlb.c b/mm/hugetlb.c
+index 1638e57..236cd49 100644
+--- a/mm/hugetlb.c
++++ b/mm/hugetlb.c
+@@ -894,6 +894,7 @@ void free_huge_page(struct page *page)
+        hugepage_subpool_put_pages(spool, 1);
+ }
+
++extern void init_page_track(struct page *s);
+ static void prep_new_huge_page(struct hstate *h, struct page *page, int nid)
+ {
+        INIT_LIST_HEAD(&page->lru);
+@@ -903,6 +904,7 @@ static void prep_new_huge_page(struct hstate *h, struct page *page, int nid)
+        h->nr_huge_pages++;
+        h->nr_huge_pages_node[nid]++;
+        spin_unlock(&hugetlb_lock);
++       init_page_track(page);
+        put_page(page); /* free it into the hugepage allocator */
+ }
+
+diff --git a/mm/swap.c b/mm/swap.c
+index b4d20d2..38066e6 100644
+--- a/mm/swap.c
++++ b/mm/swap.c
+@@ -31,12 +31,182 @@
+ #include <linux/memcontrol.h>
+ #include <linux/gfp.h>
+ #include <linux/uio.h>
++#include <linux/stacktrace.h>
+
+ #include "internal.h"
+
+ #define CREATE_TRACE_POINTS
+ #include <trace/events/pagemap.h>
+
++DEFINE_SPINLOCK(track_lock);
++
++#define TRACK_ADDRS_COUNT 16
++
++/*
++ * Tracking user of a slab.
++ */
++struct track {
++       unsigned long addr;     /* Called from address */
++       unsigned long addrs[TRACK_ADDRS_COUNT]; /* Called from address */
++       int cpu;                /* Was running on cpu */
++       int pid;                /* Pid context */
++       unsigned long when;     /* When did the operation occur */
++};
++
++enum track_item { TRACK_ALLOC, TRACK_FREE };
++
++struct page_track {
++       struct page *page;
++       struct track track_alloc;
++       struct track track_free;
++};
++
++#define CGSL_MAX_TRAK 250
++static struct page_track page_tracks[CGSL_MAX_TRAK];
++static int init_flag = 0;
++
++static struct track *get_track(struct page *page,
++               enum track_item type)
++{
++       struct track *p = NULL;
++       int i;
++       u_long  flags;
++
++       if(!PageHead(page))
++               return NULL;
++
++       spin_lock_irqsave(&track_lock, flags);
++       if(!init_flag) {
++               spin_unlock_irqrestore(&track_lock,flags);
++               return NULL;
++       }
++       spin_unlock_irqrestore(&track_lock,flags);
++
++       for(i = 0; i < CGSL_MAX_TRAK; ++i){
++               spin_lock_irqsave(&track_lock, flags);
++               if(page_tracks[i].page == page){
++                       if(TRACK_ALLOC == type) {
++                               p = &page_tracks[i].track_alloc;
++                               spin_unlock_irqrestore(&track_lock, flags);
++                               return p;
++                       }
++                       else if(TRACK_FREE == type) {
++                               p = &page_tracks[i].track_free;
++                               spin_unlock_irqrestore(&track_lock, flags);
++                               return p;
++                       } else {
++                               spin_unlock_irqrestore(&track_lock, flags);
++                               return NULL;
++                       }
++               }
++               spin_unlock_irqrestore(&track_lock,flags);
++       }
++
++       return NULL;
++}
++
++static void set_track(struct page *page,
++               enum track_item alloc)
++{
++       struct track *p = get_track(page, alloc);
++       struct stack_trace trace;
++       int i;
++       u_long          flags;
++
++       if(!p)
++               return;
++       trace.nr_entries = 0;
++       trace.max_entries = TRACK_ADDRS_COUNT;
++       trace.entries = p->addrs;
++       trace.skip = 3;
++
++       spin_lock_irqsave(&track_lock, flags);
++       save_stack_trace(&trace);
++       spin_unlock_irqrestore(&track_lock, flags);
++
++       /* See rant in lockdep.c */
++       if (trace.nr_entries != 0 &&
++                       trace.entries[trace.nr_entries - 1] == ULONG_MAX)
++               trace.nr_entries--;
++
++       for (i = trace.nr_entries; i < TRACK_ADDRS_COUNT; i++)
++               p->addrs[i] = 0;
++       p->cpu = smp_processor_id();
++       p->pid = current->pid;
++       p->when = jiffies;
++}
++
++void init_page_track(struct page *s)
++{
++       int i;
++       u_long                  flags;
++
++       if(!PageHead(s))
++               return;
++
++       for(i = 0; i < CGSL_MAX_TRAK; ++i){
++               spin_lock_irqsave(&track_lock, flags);
++               if(page_tracks[i].page == NULL){
++                       page_tracks[i].page = s;
++                       memset(&page_tracks[i].track_alloc, 0, sizeof(struct track));
++                       memset(&page_tracks[i].track_free, 0, sizeof(struct track));
++                       spin_unlock_irqrestore(&track_lock, flags);
++                       return;
++               }
++               spin_unlock_irqrestore(&track_lock, flags);
++       }
++       printk(KERN_ERR "init_tracking, too many huge_pages!");
++}
++EXPORT_SYMBOL(init_page_track);
++
++void init_page_tracks( void )
++{
++       volatile  int i;
++       u_long                  flags;
++
++       spin_lock_irqsave(&track_lock, flags);
++       for(i = 0; i < CGSL_MAX_TRAK; ++i){
++               page_tracks[i].page = NULL;
++               memset(&page_tracks[i].track_alloc, 0, sizeof(struct track));
++               memset(&page_tracks[i].track_free, 0, sizeof(struct track));
++       }
++       spin_unlock_irqrestore(&track_lock, flags);
++       init_flag = 1;
++       printk(KERN_ERR "init_tracking, too many huge_pages!");
++}
++
++#if 0
++static void print_track(const char *s, struct track *t)
++{
++       printk(KERN_ERR "INFO: %s in %pS age=%lu cpu=%u pid=%d\n",
++               s, (void *)t->addr, jiffies - t->when, t->cpu, t->pid);
++#ifdef CONFIG_STACKTRACE
++       {
++               int i;
++               for (i = 0; i < TRACK_ADDRS_COUNT; i++)
++                       if (t->addrs[i])
++                               printk(KERN_ERR "\t%pS\n", (void *)t->addrs[i]);
++                       else
++                               break;
++       }
++#endif
++}
++
++static void print_tracking(struct page *s)
++{
++       print_track("Allocated", get_track(s, TRACK_ALLOC));
++       print_track("Freed", get_track(s, TRACK_FREE));
++}
++
++static void print_page_info(struct page *page)
++{
++       printk(KERN_ERR "INFO: Slab 0x%p objects=%u used=%u fp=0x%p flags=0x%04lx\n",
++               page, page->objects, page->inuse, page->freelist, page->flags);
++
++}
++#endif
++//=============================
++
+ /* How many pages do we try to swap or page in/out together? */
+ int page_cluster;
+
+@@ -231,6 +401,9 @@ static void put_compound_page(struct page *page)
+         *  2. THP head page.
+         */
+        if (likely(!PageTail(page))) {
++               if (PageHead(page))
++                       set_track(page, TRACK_FREE);
++
+                if (put_page_testzero(page)) {
+                        /*
+                         * By the time all refcounts have been released
+@@ -254,6 +427,7 @@ static void put_compound_page(struct page *page)
+         *  __split_huge_page_refcount tearing down a THP page.
+         */
+        page_head = compound_head_by_tail(page);
++       set_track(page_head, TRACK_FREE);
+        if (!__compound_tail_refcounted(page_head))
+                put_unrefcounted_compound_page(page_head, page);
+        else
+@@ -286,6 +460,7 @@ bool __get_page_tail(struct page *page)
+        unsigned long flags;
+        bool got;
+        struct page *page_head = compound_head(page);
++       set_track(page_head, TRACK_ALLOC);
+
+        /* Ref to put_compound_page() comment. */
+        if (!__compound_tail_refcounted(page_head)) {
+@@ -1078,6 +1253,7 @@ void __init swap_setup(void)
+        }
+ #endif
+
++       init_page_tracks();
+        /* Use a smaller cluster for small-memory machines */
+        if (megs < 16)
+                page_cluster = 2;
+[root@localhost SOURCES]#
+
+
+5， 把补丁部署到生产环境上，经过一周的复现，复现出了巨页泄露的问题；基于此分析：
+
+
+先找到一个泄露的巨页：
+ffffea00b4000000
+        _count = {
+          counter = 52
+        }
+
+然后根据我们的调试补丁，解析出最后一次引用这个巨页的时候的调用地址链：
+    page = 0x ffffea00b4000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff8157e472, 0xffffffff815a8d3e, 0xffffffffa05375c5, 0xffffffffa052f51a, 0xffffffffa053d763, 0xffffffffa0540080, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+      cpu = 0x0,
+      pid = 0x576c,
+      when = 0x118b196b6
+    },
+
+然后解析addrs，查看对应的代码：
+crash>
+crash> kmem 0xffffffff8157e472
+ffffffff8157e472 (T) tcp_sendpage+1378 /usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/include/linux/mm.h: 480
+
+      PAGE         PHYSICAL      MAPPING       INDEX CNT FLAGS
+ffffea0000055f80    157e000                0        0  1 1fffff00000400 reserved
+crash> kmem 0xffffffff815a8d3e
+ffffffff815a8d3e (T) inet_sendpage+110 /usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/af_inet.c: 752
+
+crash> kmem 0xffffffffa05375c5
+ffffffffa05375c5 (t) iscsi_sw_tcp_pdu_xmit+309 [iscsi_tcp]
+
+crash>  kmem   0xffffffffa052f51a
+ffffffffa052f51a (t) iscsi_tcp_task_xmit+170 [libiscsi_tcp]
+
+crash> kmem   0xffffffffa053d763
+ffffffffa053d763 (t) iscsi_xmit_task+83 [libiscsi]
+
+crash> kmem  0xffffffffa0540080
+ffffffffa0540080 (t) iscsi_xmitworker+384 [libiscsi]
+
+crash> kmem  0xffffffff8109dedb
+ffffffff8109dedb (t) process_one_work+379 /usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/kernel/workqueue.c: 2245
+
+crash> kmem  0xffffffff810a65ff
+ffffffff810a65ff (t) kthread+207 /usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/kernel/kthread.c: 200
+
+
+可以看到最后是iscsi调用tcp_sendpage这个函数时，对巨页加了引用计数。
+
+再基于此分析开源补丁，发现在tcp断链的时候，没有put_page：
+https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit?&id=9b42d55a66d388e4dd5550107df051a9637564fc
+
+commit 9b42d55a66d388e4dd5550107df051a9637564fc
+Author: Li RongQing <lirongqing@baidu.com>
+Date:   Fri Jan 26 16:40:41 2018 +0800
+
+    tcp: release sk_frag.page in tcp_disconnect
+
+    socket can be disconnected and gets transformed back to a listening
+    socket, if sk_frag.page is not released, which will be cloned into
+    a new socket by sk_clone_lock, but the reference count of this page
+    is increased, lead to a use after free or double free issue
+
+    Signed-off-by: Li RongQing <lirongqing@baidu.com>
+    Cc: Eric Dumazet <edumazet@google.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+
+diff --git a/net/ipv4/tcp.c b/net/ipv4/tcp.c
+index c8ed3a0..874c931 100644
+--- a/net/ipv4/tcp.c
++++ b/net/ipv4/tcp.c
+@@ -2458,6 +2458,12 @@ int tcp_disconnect(struct sock *sk, int flags)
+
+        WARN_ON(inet->inet_num && !icsk->icsk_bind_hash);
+
++       if (sk->sk_frag.page) {
++               put_page(sk->sk_frag.page);
++               sk->sk_frag.page = NULL;
++               sk->sk_frag.offset = 0;
++       }
++
+        sk->sk_error_report(sk);
+        return err;
+ }
+
+这个补丁看上去应该可以解决这个问题
