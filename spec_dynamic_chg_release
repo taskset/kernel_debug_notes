@@ -1,0 +1,21 @@
+SPEC文件中，也可以根据传入的环境变量，利用%预处理语句，在编译的时候动态改变Release字段、包的名字等。
+
+特此记录一下以供学习。
+
+
+@@ -13,17 +13,20 @@
+ #%define kernel 3.1.5-1.fc16.x86_64
+ #define kernel %{kernel_source}
+ %{?kversion:%define kernel %kversion}
++%define is_rt %(if [[ %{?kversion} =~ "rt" ]]; then echo '-rt';fi)
+
+-Name: testpkg
++Name: testpkg%{is_rt}
+......
+
++%define kver %(echo %{?kversion} |awk -F '-' '{print $2}'|awk -F '.' '{print $1}')
++
+ # The entire source code is ASL 2.0 except datapath/ which is GPLv2
+ License: GPLv2
+-Release: 1%{?dist}
++Release: 1.%{kver}%{?dist}
