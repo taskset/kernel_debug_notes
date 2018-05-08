@@ -708,8 +708,50 @@ crash>
 1
 还剩下4个就巨页( addrs = {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},)是一开机就分配好了的,可以不关注。
 
-根据上面的情况，推测：在0xffffffff8157e492 中增加也巨页的引用计数，但在在某个分支可能确实减引用计数的操作。
+根据上面的情况，推测：在0xffffffff8157e492 中增加了巨页的引用计数，但在在某个分支可能缺少减引用计数的操作。
 
+# cat out.txt  | grep -B3  0xffffffff8157e492  | grep page
+    page = 0xffffea004c000000,
+    page = 0xffffea0070000000,
+    page = 0xffffea00d8000000,
+    page = 0xffffea0041000000,
+    page = 0xffffea005f000000,
+    page = 0xffffea005a000000,
+    page = 0xffffea00f6000000,
+    page = 0xffffea0043000000,
+    page = 0xffffea0062000000,
+    page = 0xffffea004f000000,
+    page = 0xffffea0048000000,
+    page = 0xffffea0045000000,
+    page = 0xffffea0074000000,
+    page = 0xffffea0059000000,
+    page = 0xffffea004e000000,
+    page = 0xffffea00f7000000,
+    page = 0xffffea00f8000000,
+    page = 0xffffea00f9000000,
+    page = 0xffffea00fa000000,
+    page = 0xffffea00fb000000,
+    page = 0xffffea00fc000000,
+    page = 0xffffea00fd000000,
+    page = 0xffffea00fe000000,
+
+发现page的lru链表上面有121个元素，这个也是一个奇怪的现象：
+crash>  page.lru 0xffffea0043000000
+    lru = {
+      next = 0xffffea0062000020,
+      prev = 0xffffea00f6000020
+    }
+crash> list  0xffffea0062000020  | wc -l
+121
+crash> page.lru 0xffffea0041000000
+    lru = {
+      next = 0xffffea005f000020,
+      prev = 0xffffea00d8000020
+    }
+crash> list  0xffffea005f000020 | wc -l
+121
+
+page的lru和 skb能够关联起来？
 
 
 
