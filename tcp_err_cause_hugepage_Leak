@@ -368,3 +368,351 @@ index c8ed3a0..874c931 100644
  }
 
 这个补丁看上去应该可以解决这个问题
+========================================================
+0508 经测试，打上补丁之后，仍然有巨页泄露。
+crash> p hstates
+hstates = $10 =
+ {{
+    next_nid_to_alloc = 0,
+    next_nid_to_free = 0,
+    order = 18,
+    mask = 18446744072635809792,
+    max_huge_pages = 170,
+    nr_huge_pages = 170,
+    free_huge_pages = 135,
+    resv_huge_pages = 0,
+    surplus_huge_pages = 0,
+    nr_overcommit_huge_pages = 0,
+    hugepage_activelist = {
+      next = 0xffffea006b000020,
+      prev = 0xffffea002d000020
+    },
+
+	
+
+crash>  list -o 0x20 -H  0xffffea006b000020
+ffffea004c000000
+ffffea0070000000
+ffffea00d8000000
+ffffea0041000000
+ffffea005f000000
+ffffea005a000000
+ffffea0063000000
+ffffea005b000000
+ffffea00c2000000
+ffffea00f6000000
+ffffea0043000000
+ffffea0062000000
+ffffea004f000000
+ffffea00dc000000
+ffffea0048000000
+ffffea0045000000
+ffffea0074000000
+ffffea00c1000000
+ffffea00e6000000
+ffffea0059000000
+ffffea0044000000
+ffffea004e000000
+ffffea00f7000000
+ffffea00f8000000
+ffffea00f9000000
+ffffea00fa000000
+ffffea00fb000000
+ffffea00fc000000
+ffffea00fd000000
+ffffea00fe000000
+ffffea002a000000
+ffffea002b000000
+ffffea002c000000
+ffffea002d000000
+ffffffff81eaf848
+crash> list -o 0x20 -H  0xffffea006b000020 | wc -l
+35
+
+34个巨页处于active状态，但实际只使用了8G个巨页，泄露了26G。
+
+crash> list -o 0x20 -H  0xffffea006b000020 > pages.txt
+crash> p page_tracks -x > dump_leak3.txt
+
+写一个脚本来分析泄露的巨页：
+#!/bin/bash
+cat pages.txt | while read LINE
+do
+        echo  ""
+        echo $LINE
+	cat dump_leak3.txt  | grep -A3 $LINE
+done
+
+# ./analy.sh
+执行，打印34个active 的巨页的堆栈调用情况。
+ffffea004c000000
+    page = 0xffffea004c000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff8157e492, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565080, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+
+ffffea0070000000
+    page = 0xffffea0070000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff8157e492, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565080, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+
+ffffea00d8000000
+    page = 0xffffea00d8000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff8157e492, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565130, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+
+ffffea0041000000
+    page = 0xffffea0041000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff8157e492, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565130, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+
+ffffea005f000000
+    page = 0xffffea005f000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff8157e492, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565080, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+
+ffffea005a000000
+    page = 0xffffea005a000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff8157e492, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565080, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+
+ffffea0063000000
+    page = 0xffffea0063000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff811b59e9, 0xffffffff81199582, 0xffffffff81193c75, 0xffffffffa09835ec, 0xffffffffa0983aae, 0xffffffffa0983f9e, 0xffffffffa04761bc, 0xffffffffa04762d3, 0xffffffffa04789fc, 0xffffffffa0999775, 0xffffffffa099de08, 0xffffffffa0984d1e, 0xffffffff811f44b5, 0xffffffff811f4731, 0xffffffff8164d909, 0x0},
+
+ffffea005b000000
+    page = 0xffffea005b000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff81524b4c, 0xffffffff8158ba21, 0xffffffff8158c3ae, 0xffffffff8157ad8c, 0xffffffff8157e424, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565130, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0},
+
+ffffea00c2000000
+    page = 0xffffea00c2000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff81522ba2, 0xffffffff8158a421, 0xffffffff81586ab5, 0xffffffff81587995, 0xffffffff8159240a, 0xffffffff81593bc2, 0xffffffff8156d784, 0xffffffff8156da69, 0xffffffff8156d3fd, 0xffffffff8156dd96, 0xffffffff81532252, 0xffffffff815324b8, 0xffffffff81532540, 0xffffffff815330b0, 0xffffffffa060f41d, 0xffffffffa061081a},
+
+ffffea00f6000000
+    page = 0xffffea00f6000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff8157e492, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565130, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+
+ffffea0043000000
+    page = 0xffffea0043000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff8157e492, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565130, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+
+ffffea0062000000
+    page = 0xffffea0062000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff8157e492, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565080, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+
+ffffea004f000000
+    page = 0xffffea004f000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff8157e492, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565080, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+
+ffffea00dc000000
+    page = 0xffffea00dc000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff81524b4c, 0xffffffff8158a1f2, 0xffffffff8158b6c7, 0xffffffff8158c3ae, 0xffffffff8157ad8c, 0xffffffff8157e424, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565080, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0},
+
+ffffea0048000000
+    page = 0xffffea0048000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff8157e492, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565080, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+
+ffffea0045000000
+    page = 0xffffea0045000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff8157e492, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565080, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+
+ffffea0074000000
+    page = 0xffffea0074000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff8157e492, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565130, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+
+ffffea00c1000000
+    page = 0xffffea00c1000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff81522ba2, 0xffffffff8158a421, 0xffffffff81586ab5, 0xffffffff815878d8, 0xffffffff8159240a, 0xffffffff81593bc2, 0xffffffff8156d784, 0xffffffff8156da69, 0xffffffff8156d3fd, 0xffffffff8156dd96, 0xffffffff81532252, 0xffffffff815324b8, 0xffffffff81532540, 0xffffffff815330b0, 0xffffffffa060f41d, 0xffffffffa061081a},
+
+ffffea00e6000000
+    page = 0xffffea00e6000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff81522ba2, 0xffffffff8158a421, 0xffffffff81586ab5, 0xffffffff815878d8, 0xffffffff8159240a, 0xffffffff81593bc2, 0xffffffff8156d784, 0xffffffff8156da69, 0xffffffff8156d3fd, 0xffffffff8156dd96, 0xffffffff81532252, 0xffffffff815324b8, 0xffffffff81532540, 0xffffffff815330b0, 0xffffffffa060f41d, 0xffffffffa061081a},
+
+ffffea0059000000
+    page = 0xffffea0059000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff8157e492, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565080, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+
+ffffea0044000000
+    page = 0xffffea0044000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff81524b4c, 0xffffffff8158ba21, 0xffffffff8158c3ae, 0xffffffff8157ad8c, 0xffffffff8157e424, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565080, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0},
+
+ffffea004e000000
+    page = 0xffffea004e000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff8157e492, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565080, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+
+ffffea00f7000000
+    page = 0xffffea00f7000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff8157e492, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565080, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+
+ffffea00f8000000
+    page = 0xffffea00f8000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff8157e492, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565080, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+
+ffffea00f9000000
+    page = 0xffffea00f9000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff8157e492, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565080, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+
+ffffea00fa000000
+    page = 0xffffea00fa000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff8157e492, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565080, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+
+ffffea00fb000000
+    page = 0xffffea00fb000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff8157e492, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565130, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+
+ffffea00fc000000
+    page = 0xffffea00fc000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff8157e492, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565130, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+
+ffffea00fd000000
+    page = 0xffffea00fd000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff8157e492, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565130, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+
+ffffea00fe000000
+    page = 0xffffea00fe000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff8157e492, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565080, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+
+ffffea002a000000
+    page = 0xffffea002a000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+
+ffffea002b000000
+    page = 0xffffea002b000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+
+ffffea002c000000
+    page = 0xffffea002c000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+
+ffffea002d000000
+    page = 0xffffea002d000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+
+ffffffff81eaf848
+[root@host-192-61-11-14 ~]#
+
+
+这两个地方比较特殊：
+
+ffffea0059000000
+    page = 0xffffea0059000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff8157e492, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565080, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},
+
+ffffea0044000000
+    page = 0xffffea0044000000,
+    track_alloc = {
+      addr = 0x0,
+      addrs = {0xffffffff81524b4c, 0xffffffff8158ba21, 0xffffffff8158c3ae, 0xffffffff8157ad8c, 0xffffffff8157e424, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565080, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0},
+
+crash>
+crash> dis -l 0xffffffff8157e492
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/include/linux/mm.h: 480
+0xffffffff8157e492 <tcp_sendpage+1378>: test   %al,%al
+crash> dis -l 0xffffffff815a8d5e
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/af_inet.c: 752
+0xffffffff815a8d5e <inet_sendpage+110>: cltq
+crash>
+crash>
+crash>
+crash> dis -l  0xffffffff81524b4c
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/include/linux/mm.h: 480
+0xffffffff81524b4c <skb_split+716>:     test   %al,%al
+crash> dis -l  0xffffffff8158ba21
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/tcp_output.c: 1709
+0xffffffff8158ba21 <tcp_write_xmit+1489>:       mov    %r13d,%edx
+crash> dis -l  0xffffffff8158c3ae
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/tcp_output.c: 2217
+0xffffffff8158c3ae <__tcp_push_pending_frames+46>:      test   %al,%al
+crash> dis -l  0xffffffff8157ad8c
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/tcp.c: 673
+0xffffffff8157ad8c <tcp_push+236>:      pop    %rbp
+crash> dis -l  0xffffffff8157e424
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/tcp.c: 969
+0xffffffff8157e424 <tcp_sendpage+1268>: mov    -0x58(%rbp),%r13d
+crash> dis -l  0xffffffff815a8d5e
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/af_inet.c: 752
+0xffffffff815a8d5e <inet_sendpage+110>: cltq
+crash>
+
+
+[root@host-192-61-11-14 debug]# cat out.txt  | grep 0xffffffff8157e492 | wc -l
+23
+[root@host-192-61-11-14 debug]# cat out.txt  | grep 0xffffffff81524b4c  | wc -l
+3
+[root@host-192-61-11-14 debug]# cat out.txt  | grep 0xffffffff81522ba2  | wc -l
+3
+[root@host-192-61-11-14 debug]# cat out.txt  | grep 0xffffffff811b59e9  | wc -l
+1
+还剩下4个就巨页( addrs = {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},)是一开机就分配好了的,可以不关注。
+
+根据上面的情况，推测：在0xffffffff8157e492 中增加也巨页的引用计数，但在在某个分支可能确实减引用计数的操作。
+
+
+
+
+
+
+
