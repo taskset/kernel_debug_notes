@@ -674,7 +674,30 @@ crash> dis -l 0xffffffff8157e492
 crash> dis -l 0xffffffff815a8d5e
 /usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/af_inet.c: 752
 0xffffffff815a8d5e <inet_sendpage+110>: cltq
+crash> dis -l 0xffffffffa05405c5
+0xffffffffa05405c5 <iscsi_sw_tcp_pdu_xmit+309>: mov    %eax,%ecx
+crash> dis -l  0xffffffffa054e51a
+0xffffffffa054e51a <iscsi_tcp_task_xmit+170>:   test   %eax,%eax
+crash> dis -l 0xffffffffa0562763
+0xffffffffa0562763 <iscsi_xmit_task+83>:        mov    %eax,%r13d
 crash>
+crash> dis -l 0xffffffffa0565080
+0xffffffffa0565080 <iscsi_xmitworker+384>:      test   %eax,%eax
+crash> dis -l 0xffffffff8109dedb
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/kernel/workqueue.c: 2245
+0xffffffff8109dedb <process_one_work+379>:      nopl   0x0(%rax,%rax,1)
+crash>
+crash> dis -l 0xffffffff8109eeab
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/include/linux/list.h: 188
+0xffffffff8109eeab <worker_thread+283>: mov    0x30(%r14),%rax
+crash> dis -l 0xffffffff810a65ff
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/kernel/kthread.c: 200
+0xffffffff810a65ff <kthread+207>:       movslq %eax,%rdi
+crash> dis -l 0xffffffff8164d858
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/arch/x86/kernel/entry_64.S: 369
+0xffffffff8164d858 <ret_from_fork+88>:  movl   $0x0,0x50(%rsp)
+
+
 crash>
 crash>
 crash> dis -l  0xffffffff81524b4c
