@@ -731,6 +731,129 @@ crash>
 1
 还剩下4个就巨页( addrs = {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},)是一开机就分配好了的,可以不关注。
 
+0xffffffff81524b4c的路径：
+# cat out.txt  | grep 0xffffffff81524b4c
+      addrs = {0xffffffff81524b4c, 0xffffffff8158ba21, 0xffffffff8158c3ae, 0xffffffff8157ad8c, 0xffffffff8157e424, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565130, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0},
+      addrs = {0xffffffff81524b4c, 0xffffffff8158a1f2, 0xffffffff8158b6c7, 0xffffffff8158c3ae, 0xffffffff8157ad8c, 0xffffffff8157e424, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565080, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0},
+      addrs = {0xffffffff81524b4c, 0xffffffff8158ba21, 0xffffffff8158c3ae, 0xffffffff8157ad8c, 0xffffffff8157e424, 0xffffffff815a8d5e, 0xffffffffa05405c5, 0xffffffffa054e51a, 0xffffffffa0562763, 0xffffffffa0565080, 0xffffffff8109dedb, 0xffffffff8109eeab, 0xffffffff810a65ff, 0xffffffff8164d858, 0x0, 0x0},
+
+0xffffffff81524b4c的路径1：
+crash> dis -l 0xffffffff81524b4c
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/include/linux/mm.h: 480
+0xffffffff81524b4c <skb_split+716>:     test   %al,%al
+crash> dis -l 0xffffffff8158ba21
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/tcp_output.c: 1709
+0xffffffff8158ba21 <tcp_write_xmit+1489>:       mov    %r13d,%edx
+crash> dis -l  0xffffffff8158c3ae
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/tcp_output.c: 2217
+0xffffffff8158c3ae <__tcp_push_pending_frames+46>:      test   %al,%al
+crash> dis -l  0xffffffff8157ad8c
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/tcp.c: 673
+0xffffffff8157ad8c <tcp_push+236>:      pop    %rbp
+crash> dis -l  0xffffffff8157e424
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/tcp.c: 969
+0xffffffff8157e424 <tcp_sendpage+1268>: mov    -0x58(%rbp),%r13d
+crash> dis -l 0xffffffff815a8d5e
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/af_inet.c: 752
+0xffffffff815a8d5e <inet_sendpage+110>: cltq
+crash> dis -l 0xffffffffa05405c5
+0xffffffffa05405c5 <iscsi_sw_tcp_pdu_xmit+309>: mov    %eax,%ecx
+crash> dis -l 0xffffffffa054e51a
+0xffffffffa054e51a <iscsi_tcp_task_xmit+170>:   test   %eax,%eax
+crash> dis -l  0xffffffffa0562763
+0xffffffffa0562763 <iscsi_xmit_task+83>:        mov    %eax,%r13d
+
+0xffffffff81524b4c 的路径2：
+crash> dis -l 0xffffffff81524b4c
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/include/linux/mm.h: 480
+0xffffffff81524b4c <skb_split+716>:     test   %al,%al
+crash> dis -l  0xffffffff8158a1f2
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/tcp_output.c: 1167
+0xffffffff8158a1f2 <tcp_fragment+370>:  movzbl 0x7c(%rbx),%edx
+crash> dis -l  0xffffffff8158b6c7
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/tcp_output.c: 2012
+0xffffffff8158b6c7 <tcp_write_xmit+631>:        test   %eax,%eax
+crash> dis -l  0xffffffff8158c3ae
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/tcp_output.c: 2217
+0xffffffff8158c3ae <__tcp_push_pending_frames+46>:      test   %al,%al
+crash> dis -l  0xffffffff8157ad8c
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/tcp.c: 673
+0xffffffff8157ad8c <tcp_push+236>:      pop    %rbp
+crash> dis -l  0xffffffff8157e424
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/tcp.c: 969
+0xffffffff8157e424 <tcp_sendpage+1268>: mov    -0x58(%rbp),%r13d
+crash> dis -l 0xffffffff815a8d5e
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/af_inet.c: 752
+0xffffffff815a8d5e <inet_sendpage+110>: cltq
+
+
+0xffffffff81522ba2 的路径：
+# cat out.txt  | grep 0xffffffff81522ba2
+      addrs = {0xffffffff81522ba2, 0xffffffff8158a421, 0xffffffff81586ab5, 0xffffffff81587995, 0xffffffff8159240a, 0xffffffff81593bc2, 0xffffffff8156d784, 0xffffffff8156da69, 0xffffffff8156d3fd, 0xffffffff8156dd96, 0xffffffff81532252, 0xffffffff815324b8, 0xffffffff81532540, 0xffffffff815330b0, 0xffffffffa060f41d, 0xffffffffa061081a},
+      addrs = {0xffffffff81522ba2, 0xffffffff8158a421, 0xffffffff81586ab5, 0xffffffff815878d8, 0xffffffff8159240a, 0xffffffff81593bc2, 0xffffffff8156d784, 0xffffffff8156da69, 0xffffffff8156d3fd, 0xffffffff8156dd96, 0xffffffff81532252, 0xffffffff815324b8, 0xffffffff81532540, 0xffffffff815330b0, 0xffffffffa060f41d, 0xffffffffa061081a},
+      addrs = {0xffffffff81522ba2, 0xffffffff8158a421, 0xffffffff81586ab5, 0xffffffff815878d8, 0xffffffff8159240a, 0xffffffff81593bc2, 0xffffffff8156d784, 0xffffffff8156da69, 0xffffffff8156d3fd, 0xffffffff8156dd96, 0xffffffff81532252, 0xffffffff815324b8, 0xffffffff81532540, 0xffffffff815330b0, 0xffffffffa060f41d, 0xffffffffa061081a},
+
+0xffffffff81522ba2 的路径1：
+crash> dis -l 0xffffffff81522ba2
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/include/linux/mm.h: 480
+0xffffffff81522ba2 <pskb_expand_head+498>:      test   %al,%al
+crash> dis -l 0xffffffff8158a421
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/tcp_output.c: 1240
+0xffffffff8158a421 <tcp_trim_head+209>: test   %eax,%eax
+crash> dis -l  0xffffffff81586ab5
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/tcp_input.c: 3020
+0xffffffff81586ab5 <tcp_ack+2517>:      test   %eax,%eax
+crash> dis -l 0xffffffff81587995
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/tcp_input.c: 5250
+0xffffffff81587995 <tcp_rcv_established+469>:   test   %eax,%eax
+crash> dis -l  0xffffffff8159240a
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/tcp_ipv4.c: 1478
+0xffffffff8159240a <tcp_v4_do_rcv+266>: jmpq   0xffffffff81592380 <tcp_v4_do_rcv+128>
+crash> dis -l  0xffffffff81593bc2
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/tcp_ipv4.c: 1702
+0xffffffff81593bc2 <tcp_v4_rcv+1954>:   mov    %eax,%r12d
+crash> dis -l 0xffffffff8156d784
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/ip_input.c: 217
+0xffffffff8156d784 <ip_local_deliver_finish+180>:       test   %eax,%eax
+crash> dis -l  0xffffffff8156da69
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/ip_input.c: 259
+0xffffffff8156da69 <ip_local_deliver+89>:       mov    -0x10(%rbp),%rcx
+crash> dis -l  0xffffffff8156d3fd
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/ip_input.c: 372
+0xffffffff8156d3fd <ip_rcv_finish+125>: pop    %rbx
+crash> dis -l  0xffffffff8156dd96
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/ip_input.c: 454
+0xffffffff8156dd96 <ip_rcv+694>:        jmpq   0xffffffff8156dbb4 <ip_rcv+212>
+crash> dis -l  0xffffffff81532252
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/core/dev.c: 3583
+0xffffffff81532252 <__netif_receive_skb_core+1410>:     mov    %eax,%r15d
+crash> dis -l  0xffffffff815324b8
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/core/dev.c: 3621
+0xffffffff815324b8 <__netif_receive_skb+24>:    pop    %rbx
+crash> dis -l  0xffffffff81532540
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/core/dev.c: 3663
+0xffffffff81532540 <netif_receive_skb+64>:      mov    %eax,%edx
+
+0xffffffff81522ba2 的路径2：
+crash> dis -l 0xffffffff81522ba2
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/include/linux/mm.h: 480
+0xffffffff81522ba2 <pskb_expand_head+498>:      test   %al,%al
+crash> dis -l 0xffffffff8158a421
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/tcp_output.c: 1240
+0xffffffff8158a421 <tcp_trim_head+209>: test   %eax,%eax
+crash> dis -l 0xffffffff81586ab5
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/tcp_input.c: 3020
+0xffffffff81586ab5 <tcp_ack+2517>:      test   %eax,%eax
+crash> dis -l 0xffffffff815878d8
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/tcp_input.c: 5155
+0xffffffff815878d8 <tcp_rcv_established+280>:   mov    %r13,%rdi
+crash> dis -l 0xffffffff8159240a
+/usr/src/debug/kernel-3.10.0-327.22.2.el7/linux-3.10.0-327.22.2.el7.test.x86_64/net/ipv4/tcp_ipv4.c: 1478
+0xffffffff8159240a <tcp_v4_do_rcv+266>: jmpq   0xffffffff81592380 <tcp_v4_do_rcv+128>
+crash>
+
+
+
 根据上面的情况，推测：在0xffffffff8157e492 中增加了巨页的引用计数，但在在某个分支可能缺少减引用计数的操作。
 
 # cat out.txt  | grep -B3  0xffffffff8157e492  | grep page
