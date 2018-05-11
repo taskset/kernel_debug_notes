@@ -147,3 +147,26 @@ unsigned int __irq_entry do_IRQ(struct pt_regs *regs)
 该如何优化？？
 
 
+高版本内核，分配vector的逻辑进行了优化：
+https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit?&id=2f75d9e1c90511bff6d1ce4de94503cc28fec032
+
+应该解决这个问题了：
+apic_update_vector 函数：
+
+	/* Setup the vector move, if required  */
+	if (apicd->vector && cpu_online(apicd->cpu)) {
+		apicd->move_in_progress = true;
+		apicd->prev_vector = apicd->vector;
+		apicd->prev_cpu = apicd->cpu;
+	} else {
+		apicd->prev_vector = 0;
+	}
+	
+这里记录了以前在的vector：
+	apicd->prev_vector = apicd->vector;
+	
+把它设置为move
+然后再smp_irq_move_cleanup_interrupt 函数中，把它清理了。
+
+
+
