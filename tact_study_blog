@@ -1,0 +1,512 @@
+
+TACT学习总结
+
+总体感觉：TACT是一个简单纯粹、尚未成熟、但勉强可用的产品。
+
+一、TACT安装、配置与操作
+1）TACT的安装
+实验环境用的centos6.2的环境，需要下载依赖包：ruby-2.5.1、rubygem、rubytree、simple-xlsx、gnuplot、Chart-Gnuplot等等。
+
+2）TACT的配置
+配置文件在如下目录：
+$TACT_DIR/apps/tutorial(可替换为待优化的应用)/tests/default/etc/tuning.conf
+
+这个配置文件大体可以划分为如下几个逻辑块：
+逻辑块	配置项	含义
+基线参数，用于和调整编译参数之后的结果进行比较。
+Tact referenct-runs 就是用这些参数执行	<baseline description="-O2" flags="-O2" />	基线参数1，表示设置编译flag O2
+	<baseline description="-O3" flags="-O3" />	基线参数2，表示设置编译flag O3
+	<baseline description="-Os" flags="-Os" />	基线参数3，表示设置编译flag Os
+遗传算法相关的参数	<!-- If board_id is "localhost", then application will be run directly on the same machine, without making ssh connection.  -->
+<populations>
+    <join_results name="local">
+        <population board_id="localhost"/>
+        <population board_id="localhost"/>
+    </join_results>
+</populations>	设置遗传算法的群体相关的参数。
+比如这里设置了两个群体。
+	<population_size value="30" />	设置群体里面个体的数目，这里表示有30个个体。
+	<single_option_mutation_rate value="0.05" />	设置变异率，比如这里表示一个变异选项有5%的几率发生变异。
+	<crossover_vs_mutation_rate value="0.6" />	群体中，需要进行交叉操作的个体的比重。比如crossover_vs_mutation_rate value="0.6"，表示一个群体中，60%的个体进行交叉操作，剩下40%的个体进行变异操作。
+	<after_crossover_mutation_rate value="0.1" />	表示交叉操作之后，再发生变异的几率。左边的配置项，表示两个编译选项进行交叉操作产生了新的编译选项之后，新的编译选项有10%可能性继续发生变异。
+	<migration_rate value="0.2" />	表示不同的群体之间发生交叉操作的几率，避免全是群体内的个体之间“近亲结婚”，：）
+比如这里表示不同群体发生交叉的几率为20%
+	<greater_is_better value="true" />	设置遗传算法取最大值还是取最小值
+	<pareto_summary_chart_generation_number value="5"/>	
+	<archive_size value="20" />	一个群体里面有有多少个个体。
+	<pareto_best_size value="5" />	
+
+	<repetitions value="1" />	设置测试用例的执行次数。
+	<do_profiling value="false" />	添加“-fprofile-generate -ftest-coverage”等编译参数。
+	<num_generations value="30" />	设置遗传算法执行多少代
+	<threads_per_testboard value="2" />	设置每一个群体里面有多少个线程
+	<!-- Should be either "performance", "size", or  "pareto". -->
+<measure value="pareto" />	设置评价函数。
+	<force_initial value="true" />	
+待调整的编译参数	<flags>
+<flag type="enum" value="-DSLOW | "/>
+<flag type="enum" value="-DFAST | "/>
+<flag type="enum" value="-DEVEN_FASTER | "/>
+<flag type="enum" value="-DMISCOMPILE | "/>
+</flags>	列出待优化的所有编译参数
+
+配置文件的一个疑问：参数<greater_is_better value="true" /> 配置了取最大值还是取最小值。对于性能来说，values值根据场景，可能越大越好、或者越小越好。但是对于binary_size来说，一般来说都是越小越好。假设我们把这个参数配置成true，会不会影响performance和binary_size? 会不会造成冲突？
+分析代码ConfParser.rb
+# if measured by size - less size is better
+if @runtime_params[:measure] == "size"
+  @runtime_params[:greater_is_better] = false
+end
+
+TACT在代码中添加了处理逻辑，如果当前评价的是”size”,则把greater_is_better强制改写为false了。所以，greater_is_better value参数只对performance有效。
+
+3）TACT的操作命令
+TACT的操作一般是依次执行如下的命令：
+序号	命令	含义
+1	cd $TACT_DIR	切换到tact的根目录
+2		设置环境变量
+3	tact init-test	初始化tact的测试环境
+4	tact init-pool	初始化tact的测试环境，创建pool等临时目录
+5	tact reference-runs	运行基线测试，生成基线数据，便于后继进行比较
+6	tact start-tuning	执行编译参数优化
+7	tact verify	生成测试报告
+
+二、TACT使用的遗传算法简介
+1）遗传算法的基本概念
+遗传算法(Genetic Algorithm, GA)是由Holland提出来的，是受遗传学中的自然选择和遗传机制启发发展起来的一种优化算法，它的基本思想是通过模拟生物进化的方法来求解复杂的优化问题。
+遗传算法的几个关键概念：个体(entity)：在遗传学中表示的是基因编码，在优化问题中指的是一个解；适应度(fitness)：评价个体好坏的取值；群体(population)：由个体组成的集合；遗传操作：遗传操作的目的是在当前的群体中产生新的群体，主要包括：选择(selection)、交叉(crossover)和变异(mutation)。
+
+遗传算法的基本流程:
+1，产生初始群体；
+2，计算适应度；
+3，遵照适应度越高，选择概率越大的原则，从种群中选择两个个体作为父方和母方;
+4，抽取父母双方进行交叉，产生子代;
+5，对子代的染色体进行变异;
+6，迭代次数是否达到门限，如果达到门限，则退出；否则跳转到底2步；
+
+2）TACT的遗传算法
+①　待优化参数类型及其遗传操作
+TACT采用面向对象的方式，对它支持的参数进行了归纳总结。总结出如下类型的参数：
+参数类型	参数含义
+GCC_flag	类似于布尔型，比如：
+<flag type="gcc_flag" value="-fmodulo-sched"/> 
+GCC_enum	类似于枚举型，比如：
+<flag type="enum"
+value="-fira-region=one|-fira-region=all|-fira-region=mixed"/> 
+GCC_param	类似于整型，比如：
+<flag type="param" value="--param large-stack-frame" default="256"
+min="200" max="312" step="8" separator="=" /> 
+Float_param	类似于浮点型，比如：
+<flag type="float_param" value="--my_float_param" default="3.1415" min="6.5" max="10.987" step="0.01" separator=" " />
+
+各种类型的参数之间的关系：GCC_flag为父类，提供了cross和mutate函数。GCC_enum、GCC_param和Float_param都是子类，它们都继承GCC_flag，实现了了各自特有的cross和mutate函数，列表总结如下：
+	交叉(cross)	变异(mutate)
+GCC_flag	  def cross(second_option)
+    if rand() < 0.5
+      return self
+    else
+      return second_option
+    end
+  end
+==》相当于随机返回second或者self	 def mutate
+    @value = @value ^ true
+  end
+
+==》相当于对flag取反
+GCC_enum	同GCC_flag，随机返回second或者self	  def mutate
+    init
+  end
+
+  def init
+    @value = rand(@enum_values.size)
+  End
+==》相当于取enum范围内的一个随机值
+GCC_param	同GCC_flag，随机返回second或者self	normal_shift：按照正态分布进行变异
+uniform_replace：按照均匀分布进行变异
+GCC_float	  def cross(second_option)
+    if rand() < 0.5
+        super
+    else
+        new_option = self.clone
+        new_option.value = (@value + second_option.value)/2.0
+        return new_option
+    end
+  end
+==》相当于取平均值	也分为正态分布、均匀分布两者类型。算法类似于GCC_param的mutate函数。
+
+①　初始群体的设计
+个体的编译参数来自于配置文件中的options小节；
+个体的数目来自于配置文件中的population_size value参数；
+通过解析xml文件，生成个体entity，若干个entity的集合，就构成了初始群体。
+
+②　适应度函数的设计
+        TACT提供了三种适应度函数：
+performance，程序的运行性能越高越好。
+size，程序编译后的二进制文件尺寸越小越好
+pareto，综合考虑performance和size，是一种多目标的遗传算法。
+
+③　控制参数的设计
+参数配置在xml文件中，见1.2小节，都是经验值，可能在实践中，还需要根据业务场景而调整。
+
+三、实验
+1）实验环境
+宿主机：centos6.2
+虚拟机：用qemu模拟arm机器
+2）配置宿主机环境
+准备好qemu-system-arm、arm的kernel以及rootfs（简单的busybox即可）
+准备好ssh软件包
+准备好交叉工具链（编译出arm架构对应的交叉工具链）
+从工具链中，提取出运行期所需要的库：
+mkdir -p ${_target_lib_prefix}
+${_TOOLCHAIN_BIN_PATH}/GetSharelib.sh PREFIX=${_target_lib_prefix} 
+tar jcf lib.tar.bz2  ${_target_lib_prefix}
+
+启动tftp服务
+# ./tftpd  -L -a  0.0.0.0:69 -c -u root  .  -s
+
+然后把ssh软件包、c库依赖包都放都在tftp的运行目录下。
+配置nfs服务
+首先安装nfs的 依赖包
+yum install nfs-utils nfs-utils-lib
+然后导出目录
+vim /etc/exports
+加入配置项：
+/home 192.168.0.30(rw,sync,no_root_squash,no_subtree_check)
+
+ 
+     让导出生效
+# exportfs -a
+# exportfs -r
+
+
+启动nfs服务：
+service nfs-server start
+
+3）配置虚拟机环境
+1，启动qemu虚拟机：
+# bin/qemu-system-arm -nographic  -kernel zteimg-arm/zImage -initrd zteimg-arm/initrd_cpio_glibc.gz   -M vexpress-a9  -append "debug  console=tty0 console=ttyAMA0,115200 ip=192.168.0.30" -m 1024    -net nic,vlan=0 -net tap,ifname=tap1,script=./mytap,downscript=./mytap_down,vlan=0
+
+配置虚拟网卡的脚本的内容：
+# cat mytap
+#!/bin/sh
+set -x
+if [ "_${QEMU_HOST_IP}" == "_" ] ; then
+QEMU_HOST_IP=192.168.0.145
+fi
+sudo /usr/sbin/tunctl -u `whoami` -t $1
+sudo /sbin/ifconfig $1 ${QEMU_HOST_IP}
+
+# cat mytap_down
+#!/bin/sh
+set -x
+sudo /sbin/ifconfig $1 down
+sudo /usr/sbin/tunctl -d $1
+
+ 
+2，qemu虚拟机里面，通过tftp获取ssh的依赖包
+# tftp -gr   ssh-server.tar.bz2  192.168.0.145
+# tftp -gr   lib.tar.bz2  192.168.0.145
+# tftp -gr   sshd_config  192.168.0.145
+# tftp -gr   prepare.sh 192.168.0.145
+
+3，执行预处理脚本、解压ssh、设置免密登录：
+# ./prepare.sh
+
+预处理脚本的内容：
+# cat prepare.sh
+#!/bin/sh
+set -x
+
+ADD_GROUP()
+{
+    tmp_inputfile=/tmp_in.log
+        mknod $tmp_inputfile p
+        exec 8<>$tmp_inputfile
+        adduser  -G  sshd  -h  /var/empty/sshd  -s  /usr/sbin/nologin sshd <&8 &
+        sleep 1
+        echo 123 >> $tmp_inputfile
+        sleep 1
+        echo 123 >> $tmp_inputfile
+        exec 8>&-
+        rm -fr $tmp_inputfile
+}
+
+ADD_USER()
+{
+    tmp_inputfile=/tmp_in.log
+        mknod $tmp_inputfile p
+        exec 8<>$tmp_inputfile
+        adduser tctest <&8 &
+        sleep 1
+        echo 123 >> $tmp_inputfile
+        sleep 1
+        echo 123 >> $tmp_inputfile
+        exec 8>&-
+        rm -fr $tmp_inputfile
+}
+PASSWD_ROOT()
+{
+    tmp_inputfile=/tmp_in.log
+        mknod $tmp_inputfile p
+        exec 8<>$tmp_inputfile
+        passwd root <&8 &
+        sleep 1
+        echo 123 >> $tmp_inputfile
+        sleep 1
+        echo 123 >> $tmp_inputfile
+        exec 8>&-
+        rm -fr $tmp_inputfile
+}
+
+rm -fr debug/ lib/
+tar jxf lib.tar.bz2
+tar jxf ssh-server.tar.bz2
+#rm -fr *.bz2
+addgroup  sshd
+ADD_GROUP
+chown  root:root  /var/empty/sshd
+chmod  711  /var/empty/sshd
+ssh-keygen  -t  rsa  -f  /etc/ssh/ssh_host_rsa_key  -N  ""
+ssh-keygen  -t  dsa  -f  /etc/ssh/ssh_host_dsa_key  -N  ""
+chmod  600  /etc/ssh/ssh_host_rsa_key  /etc/ssh/ssh_host_dsa_key
+chmod  644  /etc/ssh/ssh_host_rsa_key.pub  /etc/ssh/ssh_host_dsa_key.pub
+chmod  777  /dev/null
+chmod  666  /dev/tty
+chmod  744  /lib/*
+/servercheck.sh
+cp -fr ./sshd_config /etc/ssh/
+passwd -d root
+/usr/sbin/sshd
+mkdir /tmp
+chmod 777 /tmp
+
+
+4，挂载nfs目录
+# mount -t nfs -o rw,intr,nolock,rsize=1024,wsize=1024  192.168.0.145:/home /home
+
+4）启动测试   
+测试的具体方法参考《TACT User Manual.pdf》。
+
+四、TACT的代码分析
+
+1）类图
+对TACT主要的类进行分析，画出近似的类图。由于Visio无法使用，这里使用KsUML工具画的，这个工具不是很好用，类的属性和方法都是c++风格，和ruby不一致。只能表示大概的意思，见下图：
+
+
+
+Generation是遗传算法的入口，系统中可能会有多个群体（Population），一个Population有若干个个体（Entity）组成，一个entity由若干个编译选项（Options）组成。
+在群体被初始化之后，会对它的所有个体（entity）都执行一次评估（estimate_one），在estimate_one中会实例化TestRunner。TestRunner创建临时目录，然后根据entity的编译选项，运行do_compilation执行编译，再运行do_run执行测试用例，运行结果会写入临时文件中。TestRunner随后调用analyze_size,获取二进制文件的大小（存到TestRunner的size字段中）；调用analyze_result，分析运行的结果文件。在analyze_result中，会实例化AppResultRunner，从结果文件中解析出运行结果数据（把性能测试的分数值，存到TestRunner的score字段中）；还会实例化VerifyResults，校验运行结果。最后把TestRunner计算出来的size和score值更新到entity中。
+然后继续执行群体的选择操作，根据各个entity的size和score值，按照设定的策略（performance、size、pareto），选择出top N 个entity，参与下一轮的遗传算法。
+就这样一轮一轮的运算，会逐渐达到最优的结果，在达到遗传代数门限值（num_generations）之后，退出计算。
+
+2）算法执行过程
+TACT中遗传算法的大体实现：
+  #遗传算法的入口
+  def run
+    #初始化群体
+    init_populations
+    
+#num_generations表示遗传多少代
+    (@first..@static_params[:num_generations]).each{ |i|
+      update_migration_archive
+
+	#每一代代可能会有若干个群体，对每一个群体，并发执行遗传操作
+      (0...@static_params[:populations]).each{ |j|
+        threads << Thread.new(j) { |pop|
+          run_one_population(pop)
+        }
+      }
+	 
+      #把并发执行的各个群体的结果合并起来	 
+      join_population_best_results_for_each_board_class
+    }
+  end
+
+对某一群体执行遗传算法
+  def run_one_population(population_number)
+#获取群体的对象    
+      num = population_number + 1
+population = @populations[population_number]
+
+	#从该群体繁殖出下一代群体
+Population.breed
+
+	#对该群体执行评价操作
+Population.estimate
+
+	#更新该群体的个体集合
+population.update_archive
+
+	#打印该群体的平均适应度
+      printf("[Statistic] Average fitness: %.5f\n\n", population.average_fitness)
+ end
+
+产生下一代群体
+  def breed
+    #对该群体执行变异操作
+Mutate
+
+#对该群体执行交叉操作
+Cross
+
+#该群体的代数加一
+    @generation += 1
+    $current_generation = @generation
+  end
+
+  变异算子
+  def mutate
+(0...@mutate_size).each{ |i|
+      #根据编译参数options，产生个体entity
+      entity = Entity.new(@archive[rand(@archive.size)].options)      
+#对该个体施加变异操作
+      entity.mutate(@single_option_mutation_rate)
+#新产生的个体放入entities
+      @entities.push(entity)
+    }
+  end
+
+交叉算子
+  def cross
+      #先从现有的个体中，选择parent（即first_entity和second_entity）
+      ......
+	#然后对父母entity执行cross操作，产生子代entity，把子代entity放入集合中。
+      entity = Entity.new(first_entity.cross(second_entity.options))
+      #交叉之后，继续随机执行变异
+      entity.mutate(@after_crossover_mutation_rate)
+#新产生的个体放入entities
+      @entities.push(entity)
+    }
+  end
+
+选择算子
+  def update_archive
+    #对新产生的群体里面的个体，设置适应度
+    if @measure == "size"
+      @entities.each{ |e|  e.fitness = e.binary_size }
+    else
+      @entities.each{ |e| e.fitness = e.performance_score  }
+    end
+    
+	#把上一代和下一代的个体集合取并集
+    archive1 = @archive + @entities
+
+	#按照适应度排序
+    archive1.sort! { |a1,b1|
+      a = a1.fitness
+      b = b1.fitness
+      c = nil
+      c = 0 if a == nil && b == nil
+      c = 1 if a == nil && c == nil
+      c = -1 if b == nil && c == nil
+      c = b <=> a if @greater_is_better && c == nil
+      c = a <=> b if c == nil
+      c
+    }
+
+	#取top N个个体，更新到archive里面去，作为新一代群体的集合。
+    @archive = []
+    (0...archive1.size).each{ |i|
+      @archive.push(archive1[i]) if archive1[i].fitness != nil
+      break if @archive.size >= @archive_size
+    }
+
+	#清空下一代群体的集合
+    @entities = []
+  end
+
+评价个体
+  def estimate_one(number)
+    #设置当前的参数参数
+    params[:compile_options] = @prime + @entities[number].options_string
+    ...
+    value = nil
+    binary_size = nil
+
+    begin
+      puts "[DEBUG] Now will be estimated entity ##{number + 1}"
+	  
+	  #产生TestRunner,传入params参数，在TestRunner的构造函数中，执行了测试操作
+      runner = TestRunner.new(params)
+	  
+	  #TestRunner的score变量中，存贮了性能指标的值
+      value = runner.score
+	  
+	  #TestRunner的binary_size变量中，存贮了二进制大小
+      binary_size = runner.binary_size
+      puts "[DEBUG] Estimated entity ##{number + 1} - #{value}"      
+    end
+
+	#把TestRunner返回的性能指标、二进制大小等都记录到entity里面。
+    @entities[number].performance_score = value
+    @entities[number].binary_size = binary_size
+	......
+  end
+
+3）多目标遗传算法
+除了支持单目标的遗传算法（比如单纯的Size最小，或者单纯的Performance最大）之外，TACT还支持多目标的遗传算法（比如在Size和Performance两者之前取Pareto最优解），TACT使用了NSGA（非支配排序遗传算法），参考文献【1】中给出了NSGA算法的流程：
+
+NSGA与普通遗传算法的主要区别在于:该算法在执行选择操作之前，会根据个体之间的支配关系进行特殊处理。其余的选择操作、交叉操作和变异操作与简单遗传算法没有区别。
+从图中可以看到，在特殊处理中，算法首先判断种群是否全部分级，如果已经全部分级，则在分级的基础上，使用基于拥挤策略的小生境等技术对适应度进行调整，并确定种群的适应度（fitness）。
+   TACT的代码中，重新定义了ParetoPopulation类，继承自Population父类。在ParetoPopulation子类里面，重新定义了update_archive函数，按照NSGA算法计算了适应度，然后根据适应度来执行选择算子，更新个体集。
+根据查阅的资料，现在已经有NSGA2、NSGA3等改进算法了，后继可以继续深入分析，这里就不再展开了。
+
+4）分析代码的收获
+脚本语言用于快速开发
+TACT的工作量较大：对编译选项集合执行编译、对编译后的二进制文件执行测试、对测试结果进行解析、对解析后的结果进行排序、从而产生新的编译选项；一轮一轮地优化，最终得到最优的结果。这一工程如果用c、c++实现，代码量极大，而且调试工作量也很大。
+但TACT用ruby + bash 脚本，不到一万行代码就快速地实现了一个原型。利用语言自身的特性，减少了工作量。ruby本身自带线程、动态类型、支持容器（而且容器对象自带sort等方法）比如：
+    archive1.sort! { |a1,b1|
+      a = a1.fitness
+      b = b1.fitness
+      c = nil
+      c = 0 if a == nil && b == nil
+      c = 1 if a == nil && c == nil
+      c = -1 if b == nil && c == nil
+      c = b <=> a if @greater_is_better && c == nil
+      c = a <=> b if c == nil
+      c
+}
+用ruby语言，几句话就实现了对群体中的所有个体按照适应度重新排序的功能。
+脚本语言的特点可能是性能不高，但是用脚本语言快速实现原型之后，如果后期确实需要优化性能，还可以把部分功能用c/c++重写。
+
+用目录结构达到类似于面向对象的效果
+
+比如tutorial示例的目录结构：
+
+
+可以把这个目录结构看做一个对象tutorial。Compute-binary-hash、compute-size等是该对象自身的私有方法；Verify-result等是该对象继承自父类的方法；Pool目录下的status文件，内容为free表示该poo空闲，否则表示该pool正在被使用，这是一种使用共享资源的方法；Pool、log表示该对象在运行期数据；Etc表示该对象自身的配置信息；Private-bin、private-etc表示该对象私有的方法，用户用于扩展bin、etc等目录，定义自身特有的操作。
+添加一个新的用例，只需要仿照上图，重建创建一系列的目录结构即可，类似于添加一个新的对象。甚至运行期的中间结果也是用文件来保存的（比如：pool和log）。
+优点：实现简单、可视化；缺点：操作系统的文件系统会做一些缓存，文件的并发访问可能会导致异常。
+比如：/home/AI/tact-master-git/lib/WorkDirPool.rb:127:in `unlink': No such file or directory @ apply2files - /home/AI/tact-master-git/apps/x264/tests/default/pool/4/in_use (Errno::ENOENT)
+删除文件时，发现这个文件已经被其他线程删除了。
+
+五、下一步的改进
+在分析过程中也遇到了不少问题，对这些问题进行总结，思考怎么对TACT进行改进。
+1）TACT的安装比较繁琐
+TACT依赖包较多，在公司内网又没有ruby的源，逐一下载依赖包，比较浪费时间。
+解决方法：先下载好所有的依赖包。 对于TACT的服务器端，封装为docker镜像，包含TACT的完整的功能，把docker镜像拉下来即可使用。对于TestBoard端，也需要准备好各种依赖的软件包的全集，根据情况（裁剪版的linux或者普通的linux）拷贝上去运行。
+
+2）TACT的使用不友好
+TACT使用起来也不友好，需要cd 到$TACT_DIR，执行`bin/set-env`； 再cd 到apps/tutorial/tests/default/，先后执行 tact init-test、tact init-pools、tact reference-runs、tact start-tuning等命令。
+在使用过程中，容易发生这些错误：环境变量忘记设置；机器上如果有几份tact代码，cd若干个目录之后，环境变量出错；多个窗口并发执行tact，可能引起加锁的问题；log、pool目录如果没有清理干净，有时也会引起tact挂死；等等问题。
+解决方法：不用提供那么多灵活多变的命令，封装为一键式脚本。在脚本中，统一清理、重设环境变量，清理pool目录，判断否有多个相同的tact实例在运行；保证环境干净、单实例运行。
+
+3）TACT的代码不稳定
+TACT自带的用例都没有跑通，经常卡死。在分析代码的过程中，一边做实验、一边修改bug，已经修改了10多个问题，代码已经提交到临时的github上：
+https://github.com/ispras/tact/compare/master...w-simon:master
+
+还有很多问题需要修改。
+
+4）TACT的功能尚有遗漏
+比如，在二进制size调优之后，对测试结果生成测试报告，发现该功能还没有实现，代码还处于草稿阶段。
+
+总而言之，TACT简单纯粹、尚未成熟、但勉强可用，要实现产品化，还需要在实践的过程中不断地完善。
+谢谢。
+
+
+
+参考文献
+[1]. Srinivas N, Deb K. Multiobjective Function Optimization Using Nondominated Sorting Genetic Algorithms[J]. IEEE Transactions on Evolutionary Computation, 1994, 2(3):1301-1308.
+[2]. Deb K, Pratap A, Agarwal S, et al. A fast and elitist multiobjective genetic algorithm: NSGA-II[J]. IEEE Transactions on Evolutionary Computation, 2002
+[3].https://blog.csdn.net/lf8289/article/details/2291466
+[4].https://blog.csdn.net/xuxinrk/article/details/80335653
+
