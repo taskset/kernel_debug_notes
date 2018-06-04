@@ -900,7 +900,10 @@ crash> list  0xffffea005f000020 | wc -l
 page的lru和 skb能够关联起来？
 
 
+经过一段时间分析代码，发现如下这个补丁有可能会修改这个bug：
+https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=254d900b801fc04aa524ff7bafe28fdd1dbf0ed6
 
-
-
+ip分段的代码中可能会泄露了skb，而skb中非线性区又持有巨页的引用。
+这个补丁主要是修复headroom test的故障，但是也顺便修复了slab泄露的问题：
+slowpath 分支中，consume_skb，这样就可以释放非法的skb、从而释放巨页的引用。
 
