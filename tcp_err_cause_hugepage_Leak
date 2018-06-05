@@ -907,3 +907,36 @@ ip分段的代码中可能会泄露了skb，而skb中非线性区又持有巨页
 这个补丁主要是修复headroom test的故障，但是也顺便修复了slab泄露的问题：
 slowpath 分支中，consume_skb，这样就可以释放非法的skb、从而释放巨页的引用。
 
+
+抓取到的堆栈：
+process_one_work->iscsi_xmitworker->iscsi_xmit_task->iscsi_tcp_task_xmit->iscsi_sw_tcp_pdu_xmit->inet_sendpage->tcp_sendpage
+根据代码继续推：
+tcp_sendpage->tcp_push_one->tcp_write_xmit-> tso_fragment (tcp分片，一个skb拆分为多个skb)
+                                          -> tcp_transmit_skb (发送拆分好的skb)->queue_xmit->ip_output->ip_finish_output->ip_fragment
+这样就进入故障函数了，但是正常情况下，tcp分片只是把一个skb分为若干个skb,不会把拆分的skb放入frag_list，正常情况就是走的slow分支，不会有问题。
+
+登录故障环境分析：
+[root@host-192-61-11-2 ~]# lsmod  | grep nf_
+nf_defrag_ipv6         34768  1 openvswitch
+nf_nat_masquerade_ipv4    13412  1 ipt_MASQUERADE
+nf_conntrack_ipv4      14862  4
+nf_defrag_ipv4         12729  2 openvswitch,nf_conntrack_ipv4
+nf_nat_ipv4            14115  1 iptable_nat
+nf_nat                 26146  2 nf_nat_ipv4,nf_nat_masquerade_ipv4
+nf_conntrack          105745  6 openvswitch,nf_nat,nf_nat_ipv4,xt_conntrack,nf_nat_masquerade_ipv4,nf_conntrack_ipv4
+
+发现故障的业务环境打开了nf_defrag_ipv4   功能。
+在nf_defrag_ipv4   和 nf_defrag_ipv6   功能打开的情况下，会把拆分的skb又重新合入frag_list里面，这样就会进入fast分支，形成了补丁中描述的故障场景了。
+The problem is that if netfilter ipv6 defragmentation is used, skb_cow() in ip6_forward will only see reassembled skb.  Therefore, headroom is overestimated by 8 bytes (we pulled fragment header) and we don't check the skbs in the frag_list either.  We can't do these checks in netfilter defrag since outdev isn't known yet.  Furthermore, existing tests in ip6_fragment did not consider the fragment or ipv6 header size when checking headroom of the fraglist skbs.  While at it, also fix a skb leak on memory allocation -- ip6_fragment must consume the skb.
+......
+However similar problem still exist in ipv4.
+
+那么场景就对应得上了，基本可以确认这个补丁可以修复它。
+另外，这个补丁不仅修复了skb泄露的问题、还修复了IPV6环境下会panic的问题。
+
+
+
+
+
+
+
