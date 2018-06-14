@@ -1,0 +1,121 @@
+1, 问题描述：
+用交叉工具链,静态编译一个简单的hello world程序；
+再用同样版本的本地工具链编辑同样的hello world；
+比较两者的代码段，发现存在一些差异：
+比如，交叉工具链的：
+0000000000410da0 <bsearch>:
+  410da0:	41 57                	push   %r15
+  410da2:	45 31 ff             	xor    %r15d,%r15d
+  410da5:	41 56                	push   %r14
+  410da7:	49 89 d6             	mov    %rdx,%r14
+  410daa:	41 55                	push   %r13
+  410dac:	41 54                	push   %r12
+  410dae:	49 89 cc             	mov    %rcx,%r12
+  410db1:	55                   	push   %rbp
+  410db2:	48 89 fd             	mov    %rdi,%rbp
+  410db5:	53                   	push   %rbx
+  410db6:	48 89 f3             	mov    %rsi,%rbx
+  410db9:	48 83 ec 18          	sub    $0x18,%rsp
+  410dbd:	4c 89 44 24 08       	mov    %r8,0x8(%rsp)
+  410dc2:	eb 07                	jmp    410dcb <bsearch+0x2b>
+  410dc4:	0f 1f 40 00          	nopl   0x0(%rax)
+  410dc8:	4d 89 ee             	mov    %r13,%r14
+  410dcb:	4d 39 f7             	cmp    %r14,%r15
+  410dce:	73 38                	jae    410e08 <bsearch+0x68>
+  410dd0:	4f 8d 2c 3e          	lea    (%r14,%r15,1),%r13
+  410dd4:	48 89 ef             	mov    %rbp,%rdi
+  410dd7:	48 8b 54 24 08       	mov    0x8(%rsp),%rdx
+  410ddc:	49 d1 ed             	shr    %r13
+  410ddf:	4c 89 e8             	mov    %r13,%rax
+  410de2:	49 0f af c4          	imul   %r12,%rax
+  410de6:	48 8d 04 03          	lea    (%rbx,%rax,1),%rax
+  410dea:	48 89 04 24          	mov    %rax,(%rsp)
+  410dee:	48 89 c6             	mov    %rax,%rsi
+  410df1:	ff d2                	callq  *%rdx
+  410df3:	83 f8 00             	cmp    $0x0,%eax
+  410df6:	7c d0                	jl     410dc8 <bsearch+0x28>
+  410df8:	74 16                	je     410e10 <bsearch+0x70>
+  410dfa:	4d 8d 7d 01          	lea    0x1(%r13),%r15
+  410dfe:	4d 39 f7             	cmp    %r14,%r15
+  410e01:	72 cd                	jb     410dd0 <bsearch+0x30>
+  410e03:	0f 1f 44 00 00       	nopl   0x0(%rax,%rax,1)
+  410e08:	48 c7 04 24 00 00 00 	movq   $0x0,(%rsp)
+  410e0f:	00 
+  410e10:	48 8b 04 24          	mov    (%rsp),%rax
+  410e14:	48 83 c4 18          	add    $0x18,%rsp
+  410e18:	5b                   	pop    %rbx
+  410e19:	5d                   	pop    %rbp
+  410e1a:	41 5c                	pop    %r12
+  410e1c:	41 5d                	pop    %r13
+  410e1e:	41 5e                	pop    %r14
+  410e20:	41 5f                	pop    %r15
+  410e22:	c3                   	retq   
+  410e23:	90                   	nop
+  410e24:	90                   	nop
+  410e25:	90                   	nop
+  410e26:	90                   	nop
+  410e27:	90                   	nop
+  410e28:	90                   	nop
+  410e29:	90                   	nop
+  410e2a:	90                   	nop
+  410e2b:	90                   	nop
+  410e2c:	90                   	nop
+  410e2d:	90                   	nop
+  410e2e:	90                   	nop
+  410e2f:	90                   	nop
+
+
+本地的：
+
+0000000000410da0 <bsearch>:
+  410da0:	41 57                	push   %r15
+  410da2:	45 31 ff             	xor    %r15d,%r15d
+  410da5:	41 56                	push   %r14
+  410da7:	49 89 d6             	mov    %rdx,%r14
+  410daa:	41 55                	push   %r13
+  410dac:	41 54                	push   %r12
+  410dae:	49 89 cc             	mov    %rcx,%r12
+  410db1:	55                   	push   %rbp
+  410db2:	48 89 fd             	mov    %rdi,%rbp
+  410db5:	53                   	push   %rbx
+  410db6:	48 89 f3             	mov    %rsi,%rbx
+  410db9:	48 83 ec 18          	sub    $0x18,%rsp
+  410dbd:	4c 89 44 24 08       	mov    %r8,0x8(%rsp)
+  410dc2:	eb 07                	jmp    410dcb <bsearch+0x2b>
+  410dc4:	0f 1f 40 00          	nopl   0x0(%rax)
+  410dc8:	4d 89 ee             	mov    %r13,%r14
+  410dcb:	4d 39 f7             	cmp    %r14,%r15
+  410dce:	73 30                	jae    410e00 <bsearch+0x60>
+  410dd0:	4f 8d 2c 3e          	lea    (%r14,%r15,1),%r13
+  410dd4:	48 89 ef             	mov    %rbp,%rdi
+  410dd7:	49 d1 ed             	shr    %r13
+  410dda:	4c 89 e8             	mov    %r13,%rax
+  410ddd:	49 0f af c4          	imul   %r12,%rax
+  410de1:	48 8d 04 03          	lea    (%rbx,%rax,1),%rax
+  410de5:	48 89 04 24          	mov    %rax,(%rsp)
+  410de9:	48 89 c6             	mov    %rax,%rsi
+  410dec:	ff 54 24 08          	callq  *0x8(%rsp)
+  410df0:	83 f8 00             	cmp    $0x0,%eax
+  410df3:	7c d3                	jl     410dc8 <bsearch+0x28>
+  410df5:	74 11                	je     410e08 <bsearch+0x68>
+  410df7:	4d 8d 7d 01          	lea    0x1(%r13),%r15
+  410dfb:	4d 39 f7             	cmp    %r14,%r15
+  410dfe:	72 d0                	jb     410dd0 <bsearch+0x30>
+  410e00:	48 c7 04 24 00 00 00 	movq   $0x0,(%rsp)
+  410e07:	00 
+  410e08:	48 8b 04 24          	mov    (%rsp),%rax
+  410e0c:	48 83 c4 18          	add    $0x18,%rsp
+  410e10:	5b                   	pop    %rbx
+  410e11:	5d                   	pop    %rbp
+  410e12:	41 5c                	pop    %r12
+  410e14:	41 5d                	pop    %r13
+  410e16:	41 5e                	pop    %r14
+  410e18:	41 5f                	pop    %r15
+  410e1a:	c3                   	retq   
+  410e1b:	90                   	nop
+  410e1c:	90                   	nop
+  410e1d:	90                   	nop
+  410e1e:	90                   	nop
+  410e1f:	90                   	nop
+  
+  
