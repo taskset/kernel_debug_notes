@@ -119,3 +119,57 @@
   410e1f:	90                   	nop
   
   
+  这个函数是glibc里面的：
+  void *
+bsearch (const void *key, const void *base, size_t nmemb, size_t size,
+         int (*compar) (const void *, const void *))
+{
+  size_t l, u, idx;
+  const void *p;
+  int comparison;
+
+  l = 0;
+  u = nmemb;
+  while (l < u)
+    {
+      idx = (l + u) / 2;
+      p = (void *) (((const char *) base) + (idx * size));
+      comparison = (*compar) (key, p);
+      if (comparison < 0)
+        u = idx;
+      else if (comparison > 0)
+        l = idx + 1;
+      else
+        return (void *) p;
+    }
+
+  return NULL;
+}
+
+为什么两者有差异呢？
+主要是这一点：
+  410dd7:	48 8b 54 24 08       	mov    0x8(%rsp),%rdx
+  410ddc:	49 d1 ed             	shr    %r13
+  410ddf:	4c 89 e8             	mov    %r13,%rax
+  410de2:	49 0f af c4          	imul   %r12,%rax
+  410de6:	48 8d 04 03          	lea    (%rbx,%rax,1),%rax
+  410dea:	48 89 04 24          	mov    %rax,(%rsp)
+  410dee:	48 89 c6             	mov    %rax,%rsi
+  410df1:	ff d2                	callq  *%rdx
+
+vs：
+  410dd7:	49 d1 ed             	shr    %r13
+  410dda:	4c 89 e8             	mov    %r13,%rax
+  410ddd:	49 0f af c4          	imul   %r12,%rax
+  410de1:	48 8d 04 03          	lea    (%rbx,%rax,1),%rax
+  410de5:	48 89 04 24          	mov    %rax,(%rsp)
+  410de9:	48 89 c6             	mov    %rax,%rsi
+  410dec:	ff 54 24 08          	callq  *0x8(%rsp)
+
+交叉工具链先mov    0x8(%rsp),%rdx， 再	callq  *%rdx；
+而本地工具链直接是callq  *0x8(%rsp)
+这个属于什么优化呢？
+本地工具链和交叉工具链的编译参数有什么差异引起这个问题的？
+
+
+
