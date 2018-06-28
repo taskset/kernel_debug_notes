@@ -1,0 +1,168 @@
+
+问题：
+1、调用atof，但是不包含stdlib.h,编译出来的程序运行逻辑不对：
+[root@localhost test]# cat test.c
+#include <stdio.h>
+//#include <stdlib.h>
+
+double a=0;
+int main(int argc, char *argv[])
+{
+    a = atof(argv[1]);
+    printf("a = %f\n", a);
+
+    return 0;
+}
+[root@localhost test]# gcc test.c -o demo
+[root@localhost test]# ./demo 10
+a = 0.000000
+[root@localhost test]# ./demo 20
+a = 0.000000
+[root@localhost test]# ./demo 3
+a = 0.000000
+[root@localhost test]#
+
+2，包含stdlib.h之后，逻辑正常了：
+[root@localhost test]# cat test2.c
+#include <stdio.h>
+#include <stdlib.h>
+
+double a=0;
+int main(int argc, char *argv[])
+{
+    a = atof(argv[1]);
+    printf("a = %f\n", a);
+
+    return 0;
+}
+[root@localhost test]# gcc test2.c  -o demo2
+[root@localhost test]# ./demo2 10
+a = 10.000000
+[root@localhost test]# ./demo2 20
+a = 20.000000
+[root@localhost test]# ./demo2 3
+a = 3.000000
+
+
+3， 原因分析
+# objdump  -d -l -j .text demo
+
+......
+0000000000400504 <main>:
+main():
+  400504:       55                      push   %rbp
+  400505:       48 89 e5                mov    %rsp,%rbp
+  400508:       48 83 ec 10             sub    $0x10,%rsp
+  40050c:       89 7d fc                mov    %edi,-0x4(%rbp)
+  40050f:       48 89 75 f0             mov    %rsi,-0x10(%rbp)
+  400513:       48 8b 45 f0             mov    -0x10(%rbp),%rax
+  400517:       48 83 c0 08             add    $0x8,%rax
+  40051b:       48 8b 00                mov    (%rax),%rax
+  40051e:       48 89 c7                mov    %rax,%rdi
+  400521:       b8 00 00 00 00          mov    $0x0,%eax
+  400526:       e8 e5 fe ff ff          callq  400410 <atof@plt>
+  40052b:       f2 0f 2a c0             cvtsi2sd %eax,%xmm0
+  40052f:       f2 0f 11 05 d9 03 20    movsd  %xmm0,0x2003d9(%rip)        # 600910 <a>
+  400536:       00
+  400537:       f2 0f 10 05 d1 03 20    movsd  0x2003d1(%rip),%xmm0        # 600910 <a>
+  40053e:       00
+  40053f:       b8 58 06 40 00          mov    $0x400658,%eax
+  400544:       48 89 c7                mov    %rax,%rdi
+  400547:       b8 01 00 00 00          mov    $0x1,%eax
+  40054c:       e8 9f fe ff ff          callq  4003f0 <printf@plt>
+
+
+在查看demo2的汇编代码
+# objdump  -d -l -j .text demo2
+......
+0000000000400504 <main>:
+main():
+  400504:       55                      push   %rbp
+  400505:       48 89 e5                mov    %rsp,%rbp
+  400508:       48 83 ec 10             sub    $0x10,%rsp
+  40050c:       89 7d fc                mov    %edi,-0x4(%rbp)
+  40050f:       48 89 75 f0             mov    %rsi,-0x10(%rbp)
+  400513:       48 8b 45 f0             mov    -0x10(%rbp),%rax
+  400517:       48 83 c0 08             add    $0x8,%rax
+  40051b:       48 8b 00                mov    (%rax),%rax
+  40051e:       48 89 c7                mov    %rax,%rdi
+  400521:       e8 ea fe ff ff          callq  400410 <atof@plt>
+  400526:       f2 0f 11 05 d2 03 20    movsd  %xmm0,0x2003d2(%rip)        # 600900 <a>
+  40052d:       00
+  40052e:       f2 0f 10 05 ca 03 20    movsd  0x2003ca(%rip),%xmm0        # 600900 <a>
+  400535:       00
+  400536:       b8 48 06 40 00          mov    $0x400648,%eax
+  40053b:       48 89 c7                mov    %rax,%rdi
+  40053e:       b8 01 00 00 00          mov    $0x1,%eax
+  400543:       e8 a8 fe ff ff          callq  4003f0 <printf@plt>
+  ......
+  
+  没有包含头文件的时候的赋值：
+  400521:       b8 00 00 00 00          mov    $0x0,%eax
+  400526:       e8 e5 fe ff ff          callq  400410 <atof@plt>
+  40052b:       f2 0f 2a c0             cvtsi2sd %eax,%xmm0
+  40052f:       f2 0f 11 05 d9 03 20    movsd  %xmm0,0x2003d9(%rip)        # 600910 <a>
+  400536:       00
+  400537:       f2 0f 10 05 d1 03 20    movsd  0x2003d1(%rip),%xmm0        # 600910 <a>
+  
+  包含了头文件的时候的赋值：
+  400521:       e8 ea fe ff ff          callq  400410 <atof@plt>
+  400526:       f2 0f 11 05 d2 03 20    movsd  %xmm0,0x2003d2(%rip)        # 600900 <a>
+  40052d:       00
+  40052e:       f2 0f 10 05 ca 03 20    movsd  0x2003ca(%rip),%xmm0        # 600900 <a>
+  
+  没有包含头文件的时候，a = atof(argv[1]) 把返回值当做默认的整型的，先把eax清零，然后再函数调用之后，把eax的值当做函数的返回值，赋值给a；
+  包含头文件的时候，可以判断atof是返回的浮点型，所以没有使用eax，使用的是xmm0寄存器。
+  所以是否包含头文件，gcc生成的代码是不一样的。
+  
+  头文件主要描述库中的数据结构和接口，一个c函数库一定要有与之匹配的正确头文件。否则传参和内存布局都会出现错乱，导致严重的错误。
+  
+notes，记录如下：
+预编译
+gcc -I(指定头文件路径-isystem用于指定可能重叠的无害定义，并且在-I后搜索)
+gcc -v(用于检查搜索路径)
+gcc –save-temps -g3 -dD
+
+-save-temps用于保存预编译文件.i（.ii for c++）和汇编文件.s。
+-g3用于输出内置宏（许多和体系架构相关的宏是内置在编译器中的，在任何头文件中都找不到定义，-g3时可以在预编译文件中看到它们。也可以使用gcc -dM -E - </dev/null专门查看预编译宏
+
+
+编译
+是将预编译好的.i文件转换为汇编语言.s文件。(文本->文本)
+可以用-fdump-tree-all -fdump-rtl-all打印出编译的各个阶段的中间文件。
+
+
+汇编：
+由汇编器as来完成，将.s汇编文件转换为二进制目标文件.o(文本->elf文件)
+
+链接
+由链接器ld完成，将多个独立的.o合并为一个单个的可执行程序或者动态库。
+链接过程具体包括确定各个.o的相互引用关系，将.o中的内容(sections)按照链接脚本的要求收集起来输出，对文件中进行必要的重定位(修改一些指令或者数据），创建辅助信息（包括got表，plt序列，动态符号表，elf依赖表等）。
+链接时加入“-y 符号名” 参数，链接器会输出该符号定义和引用的.o文件
+链接时加入“--verbose” 参数，链接器会打印所有输入文件的来源
+可以使用-l 库名+ -L 搜索路径的方法
+
+加载
+readelf –s 读出elf文件的符号。
+Section在链接时提供地址锚定和功能区分。可以用readelf –S读出elf文件的节。
+Segment在装载时提供地址和长度信息。可以用readelf –l 读出elf文件的装载信息。
+动态库搜索路径的优先级顺序：
+程序构建时通过 RPATH 指定的目录；
+LD_LIBRARY_PATH 环境变量中冒号分割的目录；
+文件 /etc/ld.so.cache列出的库（使用工具ldconfig维护)；
+程序构建时 RUNPATH 指定的目录；
+目录 /lib；
+目录 /usr/lib；
+
+export LD_DEBUG环境变量之后。可以打印动态库搜索行为；
+export LD_DEBUG=symbols，也可以设置export LD_DEBUG=libs等等。
+
+  
+
+  
+  
+  
+
+  
+  
+
