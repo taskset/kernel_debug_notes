@@ -1,0 +1,118 @@
+
+问题现象：
+
+rt_rq[2]:/
+  .rt_nr_running                 : 0
+  .rt_throttled                  : 0
+  .rt_time                       : 0.027918
+  .rt_runtime                    : 950.000000
+
+runnable tasks:
+            task   PID         tree-key  switches  prio     wait-time             sum-exec        sum-sleep
+----------------------------------------------------------------------------------------------------------
+      watchdog/2    18        -5.930650     24475     0         0.000000       499.003336         0.000000 2 /
+     migration/2    19         0.000000     11811     0         0.000000       292.818111         0.000000 2 /
+     ksoftirqd/2    20   6798032.526944     10359   120         0.000000       392.264394         0.000000 2 /
+    kworker/2:0H    22       571.505552        12   100         0.000000         0.133810         0.000000 2 /
+         kswapd2   271       175.172022         4   120         0.000000         0.056441         0.000000 2 /
+     kworker/2:1   284   7014573.091333    153473   120         0.000000      3842.499245         0.000000 2 /
+  kworker/u243:1   355       175.417371         2   120         0.000000         0.048332         0.000000 2 /
+    kworker/2:1H  2077   6616104.660099     29748   100         0.000000       738.701578         0.000000 2 /
+          colord  2375     23565.915383        65   120         0.000000       101.255826         0.000000 2 /
+    dconf worker  2874     14429.661705       392   120         0.000000        26.335797         0.000000 2 /
+           gdbus  3236     14440.540387        88   120         0.000000         9.283611         0.000000 2 /
+ evolution-calen  3262   6614133.661434       433   120         0.000000       286.433580         0.000000 2 /
+    dconf worker  3265     14448.058570        37   120         0.000000         5.467689         0.000000 2 /
+    dconf worker  3291     14451.653903        22   120         0.000000         1.983834         0.000000 2 /
+     kworker/2:0 61039   4887107.246107         2   120         0.000000         0.039891         0.000000 2 /
+R           klee 101688   7015324.068603      8477   120         0.000000   5988471.079143         0.000000 2 /
+
+klee 进程一直运行，反复进入fork系统调用：
+Jul  6 16:27:39 localhost kernel: [<ffffffff811b18b1>] unmap_single_vma+0x81/0xf0
+Jul  6 16:27:39 localhost kernel: [<ffffffff811b28b9>] unmap_vmas+0x49/0x90
+Jul  6 16:27:39 localhost kernel: [<ffffffff811baf4c>] exit_mmap+0xac/0x1a0
+Jul  6 16:27:39 localhost kernel: [<ffffffff810844e7>] mmput+0x67/0xf0
+Jul  6 16:27:39 localhost kernel: [<ffffffff81085aca>] copy_process+0xb8a/0x1970
+Jul  6 16:27:39 localhost kernel: [<ffffffff81086a61>] do_fork+0x91/0x320
+Jul  6 16:27:39 localhost kernel: [<ffffffff81120886>] ? __audit_syscall_exit+0x1e6/0x280
+Jul  6 16:27:39 localhost kernel: [<ffffffff81086d76>] SyS_clone+0x16/0x20
+Jul  6 16:27:39 localhost kernel: [<ffffffff816b7c19>] stub_clone+0x69/0x90
+Jul  6 16:27:39 localhost kernel: [<ffffffff816b78c9>] ? system_call_fastpath+0x16/0x1b
+...
+
+Jul  6 16:27:42 localhost kernel: [<ffffffff811b18b1>] unmap_single_vma+0x81/0xf0
+Jul  6 16:27:42 localhost kernel: [<ffffffff811b28b9>] unmap_vmas+0x49/0x90
+Jul  6 16:27:42 localhost kernel: [<ffffffff811baf4c>] exit_mmap+0xac/0x1a0
+Jul  6 16:27:42 localhost kernel: [<ffffffff810844e7>] mmput+0x67/0xf0
+Jul  6 16:27:42 localhost kernel: [<ffffffff81085aca>] copy_process+0xb8a/0x1970
+Jul  6 16:27:42 localhost kernel: [<ffffffff81086a61>] do_fork+0x91/0x320
+Jul  6 16:27:42 localhost kernel: [<ffffffff81120886>] ? __audit_syscall_exit+0x1e6/0x280
+Jul  6 16:27:42 localhost kernel: [<ffffffff81086d76>] SyS_clone+0x16/0x20
+Jul  6 16:27:42 localhost kernel: [<ffffffff816b7c19>] stub_clone+0x69/0x90
+Jul  6 16:27:42 localhost kernel: [<ffffffff816b78c9>] ? system_call_fastpath+0x16/0x1b
+...
+Jul  6 16:29:32 localhost kernel: [<ffffffff811d3248>] ? alloc_pages_current+0x98/0x110
+Jul  6 16:29:32 localhost kernel: [<ffffffff811b509a>] copy_page_range+0x30a/0x490
+Jul  6 16:29:32 localhost kernel: [<ffffffff81084ba0>] dup_mm+0x380/0x6f0
+Jul  6 16:29:32 localhost kernel: [<ffffffff8108638e>] copy_process+0x144e/0x1970
+Jul  6 16:29:32 localhost kernel: [<ffffffff81086a61>] do_fork+0x91/0x320
+Jul  6 16:29:32 localhost kernel: [<ffffffff81120886>] ? __audit_syscall_exit+0x1e6/0x280
+Jul  6 16:29:32 localhost kernel: [<ffffffff81086d76>] SyS_clone+0x16/0x20
+Jul  6 16:29:32 localhost kernel: [<ffffffff816b7c19>] stub_clone+0x69/0x90
+Jul  6 16:29:32 localhost kernel: [<ffffffff816b78c9>] ? system_call_fastpath+0x16/0x1b
+
+
+2,分析：
+system打点，发现do_fork频繁返回，每次都是返回fffffffffffffdff（-513）
+
+>>> pid[101688] pid_name[klee]
+return value = fffffffffffffdff/nReturning from:  0xffffffff81084f40 : copy_process+0x0/0x1970 [kernel]
+Returning to  :  0xffffffff81086a61 : do_fork+0x91/0x320 [kernel]
+ 0xffffffff816b0829 : kretprobe_trampoline+0x0/0x57 [kernel]
+ 0xffffffff816b7c19 : stub_clone+0x69/0x90 [kernel]
+
+>>> pid[101688] pid_name[klee]
+return value = fffffffffffffdff/nReturning from:  0xffffffff810869d0 : do_fork+0x0/0x320 [kernel]
+Returning to  :  0xffffffff81086d76 : SyS_clone+0x16/0x20 [kernel]
+ 0xffffffff816b7c19 : stub_clone+0x69/0x90 [kernel]
+
+Too many interrupts received, exiting.
+[root@localhost wenyang]# >>> pid[101688] pid_name[klee]
+return value = fffffffffffffdff/nReturning from:  0xffffffff81084f40 : copy_process+0x0/0x1970 [kernel]
+Returning to  :  0xffffffff81086a61 : do_fork+0x91/0x320 [kernel]
+ 0xffffffff816b0829 : kretprobe_trampoline+0x0/0x57 [kernel]
+ 0xffffffff816b7c19 : stub_clone+0x69/0x90 [kernel]
+
+>>> pid[101688] pid_name[klee]
+return value = fffffffffffffdff/nReturning from:  0xffffffff810869d0 : do_fork+0x0/0x320 [kernel]
+Returning to  :  0xffffffff81086d76 : SyS_clone+0x16/0x20 [kernel]
+ 0xffffffff816b7c19 : stub_clone+0x69/0x90 [kernel]
+
+
+[root@localhost wenyang]# >>> pid[101688] pid_name[klee]
+return value = fffffffffffffdff/nReturning from:  0xffffffff81084f40 : copy_process+0x0/0x1970 [kernel]
+Returning to  :  0xffffffff81086a61 : do_fork+0x91/0x320 [kernel]
+ 0xffffffff816b0829 : kretprobe_trampoline+0x0/0x57 [kernel]
+ 0xffffffff816b7c19 : stub_clone+0x69/0x90 [kernel]
+
+对应代码：
+        /*
+         * Process group and session signals need to be delivered to just the
+         * parent before the fork or both the parent and the child after the
+         * fork. Restart if a signal comes in before we add the new process to
+         * it's process group.
+         * A fatal signal pending means that current will exit, so the new
+         * thread can't slip out of an OOM kill (or normal SIGKILL).
+        */
+        recalc_sigpending();
+        if (signal_pending(current)) {
+                spin_unlock(&current->sighand->siglock);
+                qwrite_unlock_irq(&tasklist_lock);
+                retval = -ERESTARTNOINTR;
+                goto bad_fork_cancel_cgroup;
+        }
+
+这个地方值得深入分析。
+
+
+
