@@ -115,4 +115,13 @@ Returning to  :  0xffffffff81086a61 : do_fork+0x91/0x320 [kernel]
 这个地方值得深入分析。
 
 
+提交内核bug：
+https://bugzilla.kernel.org/show_bug.cgi?id=200447
+Linus Torvalds  和  Eric W. Biederman 都有讨论，具体见bug链接。
+
+Eric W. Biederman 也提出了一系列补丁来修复这个问题：
+https://lkml.org/lkml/2018/7/10/1227
+
+下一步争取检视这些补丁，提出修改意见。
+
 
