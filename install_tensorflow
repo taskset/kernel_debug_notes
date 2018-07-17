@@ -1,0 +1,63 @@
+问题描述：
+1，需要把tensorflow安装到服务器上，服务器是centos7系统，而且服务器位于内网，无法直接连接互联网；
+2，另外一台机器（简称工作机）可以连接互联网；
+3，服务器和工作机之间是可以连接的 。
+  
+因为服务器无法直接连接互联网，所以传统的安装tensorflow的方式(pip install命令)无法使用。
+
+首先尝试源代码安装，从github下载tensorflow的代码(https://github.com/tensorflow/tensorflow)
+然后下载bazel的安装包(参考https://docs.bazel.build/versions/master/install-redhat.html)
+然后开始编译tf的代码， 参考http://www.tensorfly.cn/tfdoc/get_started/os_setup.html
+但是发现在bazel编译的过程中，也会尝试从外网下载依赖包，由于连不上，会不断报错，无法进行下去。
+
+
+最后使用工作机下载依赖包，在把依赖包拷贝到服务器的方式，这样来完成安装，具体步骤如下：
+1,首先设置pip的临时源，提高下载速度
+$ pip install -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+2, 下载tensorflow
+$ pip download 'tensorflow==1.7.0'
+
+3，把下载的tensorflow传到服务器上，开始安装：
+[root@ctr_compute2 tensorflow]# pip install tensorflow-1.7.0-cp27-none-linux_x86_64.whl
+Processing ./tensorflow-1.7.0-cp27-none-linux_x86_64.whl
+Requirement already satisfied (use --upgrade to upgrade): astor>=0.6.0 in ./astor-0.6.2 (from tensorflow==1.7.0)
+Collecting protobuf>=3.4.0 (from tensorflow==1.7.0)
+  Downloading http://mirrors.zte.com.cn/pypi/packages/9c/e4/993661ca20c57307561a14180757a7a3cb30c0283f416ff3040dca7d91d3/protobuf-3.4.0-cp27-cp27mu-manylinux1_x86_64.whl (6.2MB)
+    100% |████████████████████████████████| 6.2MB 5.5MB/s
+Requirement already satisfied (use --upgrade to upgrade): gast>=0.2.0 in /usr/lib/python2.7/site-packages (from tensorflow==1.7.0)
+Requirement already satisfied (use --upgrade to upgrade): six>=1.10.0 in /usr/lib/python2.7/site-packages (from tensorflow==1.7.0)
+Collecting tensorboard<1.8.0,>=1.7.0 (from tensorflow==1.7.0)
+  Could not find a version that satisfies the requirement tensorboard<1.8.0,>=1.7.0 (from tensorflow==1.7.0) (from versions: 1.0.0a3, 1.0.0a4, 1.0.0a5, 1.0.0a6)
+No matching distribution found for tensorboard<1.8.0,>=1.7.0 (from tensorflow==1.7.0)
+
+
+4，根据错误信息，继续在工作机上下载依赖包：  
+$ pip download  'tensorboard<1.8.0,>=1.7.0'
+Collecting tensorboard<1.8.0,>=1.7.0
+
+5，反复执行3/4步，直到安装成功。
+
+
+6，简单验证：
+# cat hello.py
+#!/usr/bin/python
+
+import tensorflow as tf
+
+
+hello = tf.constant('Hello, TensorFlow!')
+
+sess = tf.Session()
+print sess.run(hello)
+
+a = tf.constant(2)
+b = tf.constant(3)
+c = tf.constant(5)
+
+print sess.run(a*b*c)
+
+
+# python hello.py
+Hello, TensorFlow!
+30
