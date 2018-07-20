@@ -1,0 +1,32 @@
+问题描述：
+定义为const的结构体，强制转换去掉const属性后，仍然可以修改它的成员变量。
+编译的时候，没有任何警告信息、提示信息。
+
+$ cat test_const_stru.c
+struct apoint {
+        int x;
+        int y;
+};
+
+int main ()
+{
+        const struct apoint foo = {10, 20};
+        printf("foo.x=%d, foo.y=%d\n", foo.x, foo.y);
+
+        //foo.x = 5; // Error
+        struct apoint * p = (struct apoint *) &foo;
+        p->x=6;
+        printf("foo.x=%d, foo.y=%d\n", foo.x, foo.y);
+
+        struct apoint bar = {10, 20};
+        bar.x = 5; // Okay
+        printf("bar.x=%d, bar.y=%d\n", foo.x, foo.y);
+}
+
+
+$ ./a.out
+foo.x=10, foo.y=20
+foo.x=6, foo.y=20
+bar.x=6, bar.y=20
+
+能否优化gcc，在编译的时候，增加提示信息？
