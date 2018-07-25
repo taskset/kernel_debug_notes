@@ -1,0 +1,327 @@
+GOLANG编译器源码流程分析及控制指令集的方法
+
+一、工具准备
+GOLANG编译器的代码主要位于cmd/compile目录下，但代码量较多，调用关系复杂，为了便于快速分析，利用go-package-plantuml工具先把代码转化为UML图，然后根据UML图从整体上自上而下地分析。
+参考了文档：https://studygolang.com/articles/9719 来生成UML图，但在实践的过程中，需要进行一些修改才跑得通，记录如下：
+1、搭建好go的环境
+下载go源码、编译go1.4、编译go1.10最新版本，此处不再赘述。
+2、安装go-package-plantuml工具
+首先下载代码(https://gitee.com/jscode/go-package-plantuml),然后把go-package-plantuml拷贝到实验室机器的$GOROOT/src目录下。因为我们实验室的机器无法直接访问外网，所以还需要修改一下代码：
+diff --git a/main.go b/main.go
+index 97143de..5ab63e1 100644
+--- a/main.go
++++ b/main.go
+@@ -1,7 +1,7 @@
+ package main
+
+ import (
+-       "git.oschina.net/jscode/go-package-plantuml/codeanalysis"
++       "go-package-plantuml/codeanalysis"
+        log "github.com/Sirupsen/logrus"
+        "fmt"
+        "github.com/jessevdk/go-flags"
+
+
+最后安装go-package-plantuml即可：
+# go install go-package-plantuml
+
+3、安装plantuml工具
+由于sourceforge在公司里面无法访问，所以找了一条曲线下载的方法，在github的一个开源项目上，下载plantuml的压缩包：https://github.com/jvantuyl/sublime_diagram_plugin/tree/master/diagram
+下载plantuml.1.2018.1.jar。
+此外，由于centos自带的Graphviz版本太老，绘制uml图会有问题，需要下载最新的源码(https://graphviz.gitlab.io/_pages/Download/Download_source.html)，然后再编译、安装。
+
+4，工具使用
+1)生成go代码的UML文本文件
+使用go-package-plantuml，分析/home/go/go_main/src/cmd/compile目录的代码，生成uml的文本文件。命令如下：
+go-package-plantuml  --codedir /home/go/go_main/src/cmd/compile   --gopath  /home/go/go_main --outputfile /tmp/result
+
+go-package-plantuml有bug，指定的输出outfile不生效，始终生成到/tmp/uml.txt文件中。
+
+2)根据UML文本文件生成图片
+使用plantuml解析上一步生成的uml.txt，生成svg格式的图片。命令如下：
+java -jar  plantuml.1.2018.1.jar  ./all_uml.txt  -tsvg
+
+3)最终得到的UML图的svg文件如下
+
+二、GOLANG编译过程简介
+
+和传统的编译器一样，功能也分为4个阶段：
+1、词法和语法分析
+代码在cmd/compile/internal/syntax目录下，经过这一阶段的处理后，生成语法树。
+Syntax对外提供的接口为Parse，其含义如下：
+// Parse parses a single Go source file from src and returns the corresponding
+// syntax tree. If there are errors, Parse will return the first error found,
+// and a possibly partially constructed syntax tree, or nil if no correct package
+// clause was found. The base argument is only used for position information.
+//
+// If errh != nil, it is called with each error encountered, and Parse will
+// process as much source as possible. If errh is nil, Parse will terminate
+// immediately upon encountering an error.
+//
+// If a PragmaHandler is provided, it is called with each pragma encountered.
+//
+// If a FilenameHandler is provided, it is called to process each filename
+// encountered in //line directives.
+//
+// The Mode argument is currently ignored.
+func Parse(base *src.PosBase, src io.Reader, errh ErrorHandler, pragh PragmaHandler, fileh FilenameHandler, mode Mode) (_ *File, first error)
+
+
+传入单个的go文件，经词法分析、语法分析之后，返回语法树，语法树是存贮到File中的。File结构体又是node结构体的子类。涉及的部分结构体的关系截图：
+
+
+
+ Parse函数的内部实现，涉及到source、scanner等父类，以及声明（Decl，包括变量声明VarDecl、类型声明TypeDecl等）、语句（Stmt，包括返回值语句ReturnStmt、代码块BlockStmt、赋值语句AssignStmt、分支BranchStmt等等）。后继有时间再具体分析。
+
+
+
+在编译器的主函数中，词法、语法分析对应的入口代码段如下：
+src/cmd/compile/internal/gc/main.go, Main主函数：
+        timings.Start("fe", "parse")
+        lines := parseFiles(flag.Args())
+        timings.Stop()
+
+2、类型检查
+对上一步构造出的语法树进行若干次类型检查。代码主要是对语法树中的节点（即Node数据结构），调用typecheck函数：
+// typecheck type checks node n.
+// The result of typecheck MUST be assigned back to n, e.g.
+//      n.Left = typecheck(n.Left, top)
+func typecheck(n *Node, top int) *Node 
+
+比如下面的调用：
+
+        // Phase 1: const, type, and names and types of funcs.
+ ......
+        timings.Start("fe", "typecheck", "top1")
+        for i := 0; i < len(xtop); i++ {
+                n := xtop[i]
+                if op := n.Op; op != ODCL && op != OAS && op != OAS2 && (op != ODCLTYPE || !n.Left.Name.Param.Alias) {
+                        xtop[i] = typecheck(n, Etop)
+                }
+        }
+
+        // Phase 2: Variable assignments.
+        //   To check interface assignments, depends on phase 1.
+
+        // Don't use range--typecheck can add closures to xtop.
+        timings.Start("fe", "typecheck", "top2")
+        for i := 0; i < len(xtop); i++ {
+                n := xtop[i]
+                if op := n.Op; op == ODCL || op == OAS || op == OAS2 || op == ODCLTYPE && n.Left.Name.Param.Alias {
+                        xtop[i] = typecheck(n, Etop)
+                }
+        }
+
+入口调用的代码段大同小异，都是根据各种条件的组合情况，反复调用typecheck函数。而typecheck函数的实现细节很多，这里只是进行流程梳理，暂不进行细节分析。
+
+3、中间代码生成
+GOLANG使用SSA（Static Single Assignment）作为中间语言。
+src/cmd/compile/internal/gc/main.go, Main主函数中的入口如下：
+ // Prepare for SSA compilation.
+                // This must be before peekitabs, because peekitabs
+                // can trigger function compilation.
+                initssaconfig()
+
+                // Just before compilation, compile itabs found on
+                // the right side of OCONVIFACE so that methods
+                // can be de-virtualized during compilation.
+                Curfn = nil
+                peekitabs()
+
+                // Phase 8: Compile top level functions.
+                // Don't use range--walk can add functions to xtop.
+                timings.Start("be", "compilefuncs")
+                fcount = 0
+                for i := 0; i < len(xtop); i++ {
+                        n := xtop[i]
+                        if n.Op == ODCLFUNC {
+                                funccompile(n)
+                                fcount++
+                        }
+                }
+                timings.AddEvent(fcount, "funcs")
+       
+函数调用关系如下：
+funccompile -> compileSSA -> buildssa 
+而buildssa把语法树节点的Node转化为ssa.Func，其描述如下：
+
+// buildssa builds an SSA function for fn.
+func buildssa(fn *Node, worker int) *ssa.Func
+
+ssa.Func是一个比较核心的数据结构，表示一个函数，它和很多数据结构都有关联。
+// A Func represents a Go func declaration (or function literal) and its body.
+// This package compiles each Func independently.
+// Funcs are single-use; a new Func must be created for every compiled function.
+
+
+4、机器指令生成
+和上一步的入口是一样的，funccompile -> compileSSA ，
+compileSSA函数里面，先调用buildssa生成中间代码，然后再调用genssa把中间代码放入Progs结构中，最后调用Flush生成机器指令：
+// compileSSA builds an SSA backend function,
+// uses it to generate a plist,
+// and flushes that plist to machine code.
+// worker indicates which of the backend workers is doing the processing.
+func compileSSA(fn *Node, worker int) {
+        f := buildssa(fn, worker)
+        if f.Frontend().(*ssafn).stksize >= maxStackSize {
+                largeStackFramesMu.Lock()
+                largeStackFrames = append(largeStackFrames, fn.Pos)
+                largeStackFramesMu.Unlock()
+                return
+        }
+        pp := newProgs(fn, worker)
+        genssa(f, pp)
+        pp.Flush()
+        // fieldtrack must be called after pp.Flush. See issue 20014.
+        fieldtrack(pp.Text.From.Sym, fn.Func.FieldTrack)
+        pp.Free()
+}
+
+Progs.Flush的定义如下：
+// Flush converts from pp to machine code.
+func (pp *Progs) Flush() {
+        plist := &obj.Plist{Firstpc: pp.Text, Curfn: pp.curfn}
+        obj.Flushplist(Ctxt, plist, pp.NewProg, myimportpath)
+}
+
+obj已经属于汇编器。Progs表示函数中的指令，也是一个比较核心的数据结构，可以根据它生成机器指令。
+// Progs accumulates Progs for a function and converts them into machine code.
+
+
+
+三、ARM控制指令集的方法
+上面对GOLANG的代码流程进行了大体的分析，现在结合ARM结构，分析GOLANG是如何控制指令集的。
+ARM架构的指令集有ARMv5、ARMv6、ARMv7等，同样的go代码，在不同的架构下，需要生成不同的机器指令。前面的语法分析、类型检查、中间代码生成和机器指令生成，只需要在第三步和第四步进行修改，就可以实现这个功能。
+1、在全局变量中引入了GOARM变量来标识指令集
+可以看到这是一个通用的方法，ARM、x86、MIPS等架构都有各自的变量，来保存各自的指令集：
+
+var (
+        defaultGOROOT string // set by linker
+
+        GOROOT  = envOr("GOROOT", defaultGOROOT)
+        GOARCH  = envOr("GOARCH", defaultGOARCH)
+        GOOS    = envOr("GOOS", defaultGOOS)
+        GO386   = envOr("GO386", defaultGO386)
+        GOARM   = goarm()
+        GOMIPS  = gomips()
+        Version = version
+)
+
+2、GOLANG工具链制作时，生成文件，保存GOARM的值
+
+// mkzbootstrap writes cmd/internal/objabi/zbootstrap.go:
+//
+//  package objabi
+//
+//  const defaultGOROOT = <goroot>
+//  const defaultGO386 = <go386>
+//  const defaultGOARM = <goarm>
+//  const defaultGOMIPS = <gomips>
+//  const defaultGOOS = runtime.GOOS
+//  const defaultGOARCH = runtime.GOARCH
+//  const defaultGO_EXTLINK_ENABLED = <goextlinkenabled>
+//  const version = <version>
+//  const stackGuardMultiplier = <multiplier value>
+//  const goexperiment = <goexperiment>
+//
+// The use of runtime.GOOS and runtime.GOARCH makes sure that
+// a cross-compiled compiler expects to compile for its own target
+// system. That is, if on a Mac you do:
+//
+//  GOOS=linux GOARCH=ppc64 go build cmd/compile
+//
+// the resulting compiler will default to generating linux/ppc64 object files.
+// This is more useful than having it default to generating objects for the
+// original target (in this example, a Mac).
+func mkzbootstrap(file string) {
+    var buf bytes.Buffer
+    fmt.Fprintf(&buf, "// Code generated by go tool dist; DO NOT EDIT.\n")
+    fmt.Fprintln(&buf)
+    fmt.Fprintf(&buf, "package objabi\n")
+    fmt.Fprintln(&buf)
+    fmt.Fprintf(&buf, "import \"runtime\"\n")
+    fmt.Fprintln(&buf)
+    fmt.Fprintf(&buf, "const defaultGO386 = `%s`\n", go386)
+    fmt.Fprintf(&buf, "const defaultGOARM = `%s`\n", goarm)
+    fmt.Fprintf(&buf, "const defaultGOMIPS = `%s`\n", gomips)
+    fmt.Fprintf(&buf, "const defaultGOOS = runtime.GOOS\n")
+    fmt.Fprintf(&buf, "const defaultGOARCH = runtime.GOARCH\n")
+    fmt.Fprintf(&buf, "const defaultGO_EXTLINK_ENABLED = `%s`\n", goextlinkenabled)
+    fmt.Fprintf(&buf, "const version = `%s`\n", findgoversion())
+    fmt.Fprintf(&buf, "const stackGuardMultiplier = %d\n", stackGuardMultiplier())
+    fmt.Fprintf(&buf, "const goexperiment = `%s`\n", os.Getenv("GOEXPERIMENT"))
+
+    writefile(buf.String(), file, writeSkipSame)
+}
+
+3、Go启动的时候，还可以通过环境变量的方式，更改GOARM的值
+
+// xinit handles initialization of the various global state, like goroot and goarch.
+func xinit() {
+        b := os.Getenv("GOROOT")
+        if b == "" {
+                fatalf("$GOROOT must be set")
+        }
+        goroot = filepath.Clean(b)
+......
+        b = os.Getenv("GOARM")
+        if b == "" {
+                b = xgetgoarm()
+        }
+        goarm = b
+......
+
+4、编译go程序的时候，通过GOARM的取值，来标识不同的指令集
+envOr函数优先从环境变量中读取，如果为空，再从工具链制作时生成的文本文件中读取。
+
+func goarm() int {
+        switch v := envOr("GOARM", defaultGOARM); v {
+        case "5":
+                return 5
+        case "6":
+                return 6
+        case "7":
+                return 7
+        }
+        // Fail here, rather than validate at multiple call sites.
+        log.Fatalf("Invalid GOARM value. Must be 5, 6, or 7.")
+        panic("unreachable")
+}
+
+
+
+5、编译go程序、生成指令的是偶，根据GOARM的值，选择不同的指令
+SSA的规则文件中的部分代码片段如下：
+// count trailing zero for ARMv5 and ARMv6
+// 32 - CLZ(x&-x - 1)
+(Ctz32 <t> x) && objabi.GOARM<=6 -> (RSBconst [32] (CLZ <t> (SUBconst <t> (AND <t> x (RSBconst <t> [0] x)) [1])))
+
+// count trailing zero for ARMv7
+(Ctz32 <t> x) && objabi.GOARM==7 -> (CLZ <t> (RBIT <t> x))
+
+
+6、运行时库，也是根据GOARM来选择指令的
+运行时库中的部分代码片段如下：
+// armPublicationBarrier is a native store/store barrier for ARMv7+.
+// On earlier ARM revisions, armPublicationBarrier is a no-op.
+// This will not work on SMP ARMv6 machines, if any are in use.
+// To implement publicationBarrier in sys_$GOOS_arm.s using the native
+// instructions, use:
+//
+//      TEXT ·publicationBarrier(SB),NOSPLIT,$-4-0
+//              B       runtime·armPublicationBarrier(SB)
+//
+TEXT runtime·armPublicationBarrier(SB),NOSPLIT,$-4-0
+        MOVB    runtime·goarm(SB), R11
+        CMP     $7, R11
+        BLT     2(PC)
+        WORD $0xf57ff05e        // DMB ST
+        RET
+
+
+可以看到，ARM架构通过引入GOARM变量，可以在编译时选择不同的指令，也可以在运行时库中自动选择不同的指令。GOARM变量的值是再制作GOLANG工具链的时候写入到文件中的，而且还可以通过环境变量，在运行的时候动态修改GOARM的值。
+
+四、控制PPC指令集的方法
+我们可以参考ARM的实现，通过添加类似于GOPPC64这样的变量来控制指令集。
+
+
