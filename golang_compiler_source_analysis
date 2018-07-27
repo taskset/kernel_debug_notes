@@ -321,7 +321,192 @@ TEXT runtime·armPublicationBarrier(SB),NOSPLIT,$-4-0
 
 可以看到，ARM架构通过引入GOARM变量，可以在编译时选择不同的指令，也可以在运行时库中自动选择不同的指令。GOARM变量的值是再制作GOLANG工具链的时候写入到文件中的，而且还可以通过环境变量，在运行的时候动态修改GOARM的值。
 
-四、控制PPC指令集的方法
-我们可以参考ARM的实现，通过添加类似于GOPPC64这样的变量来控制指令集。
+四、控制ppc大端e6500指令集的方法
+我们可以参考ARM的实现，通过添加GOPPC变量来控制指令集。具体实现如下：
+1、引入了GOPPC环境变量，使用它来标识CPU类型：
+diff --git a/src/cmd/dist/build.go b/src/cmd/dist/build.go
+index 49ed800..9aaf33c 100644
+--- a/src/cmd/dist/build.go
++++ b/src/cmd/dist/build.go
+@@ -31,6 +31,7 @@ var (
+        goarm            string
+        go386            string
+        gomips           string
++       goppc            string
+        goroot           string
+        goroot_final     string
+        goextlinkenabled string
+@@ -145,6 +146,9 @@ func xinit() {
+        }
+        gomips = b
 
++       b = os.Getenv("GOPPC")
++       goppc = b
++
+        if p := pathf("%s/src/all.bash", goroot); !isfile(p) {
+                fatalf("$GOROOT is not set correctly or not exported\n"+
+                        "\tGOROOT=%s\n"+
+
+diff --git a/src/cmd/internal/objabi/util.go b/src/cmd/internal/objabi/util.go
+index eafef6b..92e4924 100644
+--- a/src/cmd/internal/objabi/util.go
++++ b/src/cmd/internal/objabi/util.go
+@@ -27,6 +27,7 @@ var (
+        GO386   = envOr("GO386", defaultGO386)
+        GOARM   = goarm()
+        GOMIPS  = gomips()
++       GOPPC   = goppc()
+        Version = version
+ )
+
+@@ -53,6 +54,25 @@ func gomips() string {
+        panic("unreachable")
+ }
+
++type CpuType uint
++
++const (
++       PpcDefault CpuType = iota
++       PpcE6500
++)
++
++func goppc() CpuType {
++       switch v := envOr("GOPPC", defaultGOPPC); v {
++       case "e6500":
++               return PpcE6500
++       case "":
++               return PpcDefault
++       }
++       // Fail here, rather than validate at multiple call sites.
++       log.Fatalf("Invalid GOPPC value. Must be e6500 or empty.")
++       panic("unreachable")
++}
++
+
+
+2、golang工具链制作成功后，把当前的GOPPC环境变量的值持久化到文件中
+diff --git a/src/cmd/dist/buildruntime.go b/src/cmd/dist/buildruntime.go
+index 5cbcd81..b8240cd 100644
+--- a/src/cmd/dist/buildruntime.go
++++ b/src/cmd/dist/buildruntime.go
+@@ -44,6 +44,7 @@ func mkzversion(dir, file string) {
+ //     const defaultGO386 = <go386>
+ //     const defaultGOARM = <goarm>
+ //     const defaultGOMIPS = <gomips>
++//     const defaultGOPPC = <goppc>
+ //     const defaultGOOS = runtime.GOOS
+ //     const defaultGOARCH = runtime.GOARCH
+ //     const defaultGO_EXTLINK_ENABLED = <goextlinkenabled>
+@@ -71,6 +72,7 @@ func mkzbootstrap(file string) {
+        fmt.Fprintf(&buf, "const defaultGO386 = `%s`\n", go386)
+        fmt.Fprintf(&buf, "const defaultGOARM = `%s`\n", goarm)
+        fmt.Fprintf(&buf, "const defaultGOMIPS = `%s`\n", gomips)
++       fmt.Fprintf(&buf, "const defaultGOPPC = `%s`\n", goppc)
+        fmt.Fprintf(&buf, "const defaultGOOS = runtime.GOOS\n")
+        fmt.Fprintf(&buf, "const defaultGOARCH = runtime.GOARCH\n")
+        fmt.Fprintf(&buf, "const defaultGO_EXTLINK_ENABLED = `%s`\n", goextlinkenabled)
+
+
+3、Golang主分支代码已经删掉了对于PPC64大端的支持，需要回退。
+需要回退如下补丁：
+https://github.com/golang/go/commit/7f5302560424b9ff219dbf217801615fef3b1f38
+https://github.com/golang/go/commit/a9e76a2583ce24c1773e81310dc208e51f641983
+https://github.com/golang/go/commit/1f57372cb1c2c96254bb16fdb41295d0c37f33d5
+https://github.com/golang/go/commit/cc306c2d2c77b988e0321f14ab1951c26d8fa070
+https://github.com/golang/go/commit/81e73292faf10c0f7cda5b6614e3909c17cf4f31
+https://github.com/golang/go/commit/40e25895e3ab998033cc9f7086332d046c7f608a
+https://github.com/golang/go/commit/be943df58860e7dec008ebb8d68428d54e311b94
+
+回退补丁之后，新增了一个OldArch变量来表示是否PPC64大端（目前PPC64大端只有E6500处理器）：
+diff --git a/src/cmd/compile/internal/ssa/config.go b/src/cmd/compile/internal/ssa/config.go
+index ae6caee..5576dec 100644
+--- a/src/cmd/compile/internal/ssa/config.go
++++ b/src/cmd/compile/internal/ssa/config.go
+@@ -37,6 +37,7 @@ type Config struct {
+        nacl            bool          // GOOS=nacl
+        use387          bool          // GO386=387
+        SoftFloat       bool          //
++       OldArch         bool          // True for older versions of architecture, e.g. true for PPC64BE, false for PPC64LE
+        NeedsFpScratch  bool          // No direct move between GP and FP register sets
+        BigEndian       bool          //
+        sparsePhiCutoff uint64        // Sparse phi location algorithm used above this #blocks*#variables score
+@@ -216,7 +217,9 @@ func NewConfig(arch string, types Types, ctxt *obj.Link, optimize bool) *Config
+                c.hasGReg = true
+                c.noDuffDevice = objabi.GOOS == "darwin" // darwin linker cannot handle BR26 reloc with non-zero addend
+        case "ppc64":
++               c.OldArch = true
+                c.BigEndian = true
++               c.NeedsFpScratch = true
+                fallthrough
+        case "ppc64le":
+                c.PtrSize = 8
+
+通过OldArch变量来控制是否生成E6500处理器支持的指令。
+
+4、和ARM的实现方案相比，OldArch是冗余的。我们可以把它删掉，利用第一步中的GOPPC环境变量来达到同样的目的。
+部分代码修改如下：
+diff --git a/src/cmd/compile/internal/ssa/config.go b/src/cmd/compile/internal/ssa/config.go
+index 5576dec..d7202d6 100644
+--- a/src/cmd/compile/internal/ssa/config.go
++++ b/src/cmd/compile/internal/ssa/config.go
+@@ -37,7 +37,6 @@ type Config struct {
+ 	nacl            bool          // GOOS=nacl
+ 	use387          bool          // GO386=387
+ 	SoftFloat       bool          //
+-	OldArch         bool          // True for older versions of architecture, e.g. true for PPC64BE, false for PPC64LE
+ 	NeedsFpScratch  bool          // No direct move between GP and FP register sets
+ 	BigEndian       bool          //
+ 	sparsePhiCutoff uint64        // Sparse phi location algorithm used above this #blocks*#variables score
+@@ -217,7 +216,6 @@ func NewConfig(arch string, types Types, ctxt *obj.Link, optimize bool) *Config
+ 		c.hasGReg = true
+ 		c.noDuffDevice = objabi.GOOS == "darwin" // darwin linker cannot handle BR26 reloc with non-zero addend
+ 	case "ppc64":
+-		c.OldArch = true
+ 		c.BigEndian = true
+ 		c.NeedsFpScratch = true
+ 		fallthrough
+diff --git a/src/cmd/compile/internal/ssa/gen/PPC64.rules b/src/cmd/compile/internal/ssa/gen/PPC64.rules
+index 91c8dc3..eb09efd 100644
+--- a/src/cmd/compile/internal/ssa/gen/PPC64.rules
++++ b/src/cmd/compile/internal/ssa/gen/PPC64.rules
+@@ -57,15 +57,15 @@
+ (Div64F x y) -> (FDIV x y)
+ 
+ // Lowering float <-> int
+-(Cvt32to32F x) && config.OldArch -> (FRSP (FCFID (Xi2f64 (SignExt32to64 x))))
+-(Cvt32to64F x) && config.OldArch -> (FCFID (Xi2f64 (SignExt32to64 x)))
+-(Cvt64to32F x) && config.OldArch -> (FRSP (FCFID (Xi2f64 x)))
+-(Cvt64to64F x) && config.OldArch -> (FCFID (Xi2f64 x))
++(Cvt32to32F x) && objabi.GOPPC == objabi.PpcE6500 -> (FRSP (FCFID (Xi2f64 (SignExt32to64 x))))
++(Cvt32to64F x) && objabi.GOPPC == objabi.PpcE6500 -> (FCFID (Xi2f64 (SignExt32to64 x)))
++(Cvt64to32F x) && objabi.GOPPC == objabi.PpcE6500 -> (FRSP (FCFID (Xi2f64 x)))
++(Cvt64to64F x) && objabi.GOPPC == objabi.PpcE6500 -> (FCFID (Xi2f64 x))
+ 
+-(Cvt32Fto32 x) && config.OldArch -> (Xf2i64 (FCTIWZ x))
+-(Cvt32Fto64 x) && config.OldArch -> (Xf2i64 (FCTIDZ x))
+-(Cvt64Fto32 x) && config.OldArch -> (Xf2i64 (FCTIWZ x))
+-(Cvt64Fto64 x) && config.OldArch -> (Xf2i64 (FCTIDZ x))
++(Cvt32Fto32 x) && objabi.GOPPC == objabi.PpcE6500 -> (Xf2i64 (FCTIWZ x))
++(Cvt32Fto64 x) && objabi.GOPPC == objabi.PpcE6500 -> (Xf2i64 (FCTIDZ x))
++(Cvt64Fto32 x) && objabi.GOPPC == objabi.PpcE6500 -> (Xf2i64 (FCTIWZ x))
++(Cvt64Fto64 x) && objabi.GOPPC == objabi.PpcE6500 -> (Xf2i64 (FCTIDZ x))
+ 
+ (Cvt32to32F x) -> (FCFIDS (MTVSRD (SignExt32to64 x)))
+ (Cvt32to64F x) -> (FCFID (MTVSRD (SignExt32to64 x)))
+@@ -749,8 +749,8 @@
+ 
+ // Use register moves instead of stores and loads to move int<->float values
+ // Common with math Float64bits, Float64frombits
+-(MOVDload [off] {sym} ptr (FMOVDstore [off] {sym} ptr x _)) && !config.OldArch -> (MFVSRD x)
+-(FMOVDload [off] {sym} ptr (MOVDstore [off] {sym} ptr x _)) && !config.OldArch -> (MTVSRD x)
++(MOVDload [off] {sym} ptr (FMOVDstore [off] {sym} ptr x _)) && objabi.GOPPC != objabi.PpcE6500 -> (MFVSRD x)
++(FMOVDload [off] {sym} ptr (MOVDstore [off] {sym} ptr x _)) && objabi.GOPPC != objabi.PpcE6500 -> (MTVSRD x)
+ 
+ (FMOVDstore [off] {sym} ptr (MTVSRD x) mem) -> (MOVDstore [off] {sym} ptr x mem)
+ (MOVDstore [off] {sym} ptr (MFVSRD x) mem) -> (FMOVDstore [off] {sym} ptr x mem)
+
+经过上述修改，我们已经可以通过GOPPC环境变量来控制编译器生成的指令了。
+
+5、遗留问题
+经过上面4步的修改，已经可以控制编译器生成的指令了。但是运行时库中的指令还没有控制住。
 
