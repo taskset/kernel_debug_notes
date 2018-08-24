@@ -1,0 +1,133 @@
+1，最开始报错的堆栈：
+[937151.638318] ------------[ cut here ]------------
+[937151.638328] WARNING: at net/ipv4/tcp_output.c:1045 tcp_set_skb_tso_segs+0xeb/0x100()
+[937151.638329] Modules linked in: rbd(OE) libceph(OE) vport_vxlan nfsv3 nfs_acl rpcsec_gss_krb5 auth_rpcgss nfsv4 dns_resolver nfs lockd grace sunrpc fscache nf_conntrack_ftp xt_CHECKSUM iptable_mangle ipt_MASQUERADE nf_nat_masquerade_ipv4 iptable_nat nf_nat_ipv4 nf_nat nf_conntrack_ipv4 nf_defrag_ipv4 xt_conntrack nf_conntrack ipt_REJECT tun bridge stp llc ebtable_filter ebtables ip6table_filter ip6_tables mpt3sas(OE) mpt2sas raid_class scsi_transport_sas mptctl mptbase iptable_filter bonding openvswitch ext4 mbcache jbd2 coretemp intel_rapl crc32_pclmul ghash_clmulni_intel aesni_intel lrw gf128mul sg glue_helper ablk_helper cryptd iTCO_wdt iTCO_vendor_support mxm_wmi pcspkr ipmi_devintf shpchp lpc_ich mfd_core i2c_i801 mei_me mei ipmi_si ipmi_msghandler wmi acpi_power_meter register_ipmc_reboot(OE)
+[937151.638370]  ifb kvm_intel kvm binfmt_misc dm_multipath ip_tables xfs libcrc32c sd_mod crc_t10dif crct10dif_generic ast syscopyarea sysfillrect sysimgblt crct10dif_pclmul drm_kms_helper crct10dif_common crc32c_intel ttm ixgbe(OE) vxlan ahci ip6_udp_tunnel igb(OE) drm dca udp_tunnel libahci ptp libata pps_core i2c_algo_bit megaraid_sas(OE) i2c_core dm_mirror dm_region_hash dm_log dm_mod
+[937151.638391] CPU: 4 PID: 31684 Comm: zxve_host_na Tainted: G           OE  ------------   3.10.0-327.22.2.el7.x86_64 #1
+[937151.638393] Hardware name: Sugon I620-G20/60G24-US, BIOS 225 12/07/2017
+[937151.638394] Call Trace:
+[937151.638401]  [<ffffffff8163f2f6>] dump_stack+0x19/0x1b
+[937151.638405]  [<ffffffff8107dd70>] warn_slowpath_common+0x70/0xb0
+[937151.638407]  [<ffffffff8107deba>] warn_slowpath_null+0x1a/0x20
+[937151.638410]  [<ffffffff8158bb7b>] tcp_set_skb_tso_segs+0xeb/0x100
+[937151.638412]  [<ffffffff8158bbc7>] tcp_init_tso_segs+0x37/0x50
+[937151.638414]  [<ffffffff8158d7b9>] tcp_write_xmit+0x1d9/0xce0
+[937151.638417]  [<ffffffff8158e53e>] __tcp_push_pending_frames+0x2e/0xc0
+[937151.638419]  [<ffffffff8157cf3c>] tcp_push+0xec/0x120
+[937151.638421]  [<ffffffff81580728>] tcp_sendmsg+0xc8/0xc20
+[937151.638424]  [<ffffffff815aae24>] inet_sendmsg+0x64/0xb0
+[937151.638428]  [<ffffffff810b9565>] ? check_preempt_curr+0x75/0xa0
+[937151.638434]  [<ffffffff81519917>] sock_aio_write+0x157/0x180
+[937151.638437]  [<ffffffff811e267d>] do_sync_write+0x8d/0xd0
+[937151.638440]  [<ffffffff811e2f95>] vfs_write+0x1b5/0x1e0
+[937151.638442]  [<ffffffff811e393f>] SyS_write+0x7f/0xe0
+[937151.638445]  [<ffffffff816513fd>] system_call_fastpath+0x16/0x1b
+[937151.638446] ---[ end trace c9a1bbbf699c3055 ]---
+
+
+后面这个skb就发生了两次释放：
+crash> kmem  ffff881e70680000
+CACHE            NAME                 OBJSIZE  ALLOCATED     TOTAL  SLABS  SSIZE
+kmem: kmalloc-512: slab: ffffea0079c1a000 duplicate freelist object: ffff881e70680000
+ffff881fff003600 kmalloc-512              512       5917     15328    479    16k
+  SLAB              MEMORY            NODE  TOTAL  ALLOCATED  FREE
+kmem: kmalloc-512: slab: ffffea0079c1a000 duplicate freelist object: ffff881e70680000
+
+warning的代码：
+1038 /* Initialize TSO segments for a packet. */
+1039 static void tcp_set_skb_tso_segs(const struct sock *sk, struct sk_buff *skb,
+1040                  unsigned int mss_now)
+1041 {
+1042     struct skb_shared_info *shinfo = skb_shinfo(skb);
+1043
+1044     /* Make sure we own this skb before messing gso_size/gso_segs */
+1045     WARN_ON_ONCE(skb_cloned(skb));
+
+2， 根据引入这个WARNON的补丁：
+commit c52e2421f7368fd36cbe330d2cf41b10452e39a9
+Author: Eric Dumazet <edumazet@google.com>
+Date:   Tue Oct 15 11:54:30 2013 -0700
+
+    tcp: must unclone packets before mangling them
+
+    TCP stack should make sure it owns skbs before mangling them.
+
+    We had various crashes using bnx2x, and it turned out gso_size
+    was cleared right before bnx2x driver was populating TC descriptor
+    of the _previous_ packet send. TCP stack can sometime retransmit
+    packets that are still in Qdisc.
+
+    Of course we could make bnx2x driver more robust (using
+    ACCESS_ONCE(shinfo->gso_size) for example), but the bug is TCP stack.
+
+    We have identified two points where skb_unclone() was needed.
+
+    This patch adds a WARN_ON_ONCE() to warn us if we missed another
+    fix of this kind.
+
+    Kudos to Neal for finding the root cause of this bug. Its visible
+    using small MSS.
+
+    Signed-off-by: Eric Dumazet <edumazet@google.com>
+    Signed-off-by: Neal Cardwell <ncardwell@google.com>
+    Cc: Yuchung Cheng <ycheng@google.com>
+    Signed-off-by: David S. Miller <davem@davemloft.net>
+
+diff --git a/net/ipv4/tcp_output.c b/net/ipv4/tcp_output.c
+index c6f01f2..8fad1c1 100644
+--- a/net/ipv4/tcp_output.c
++++ b/net/ipv4/tcp_output.c
+@@ -986,6 +986,9 @@ static void tcp_queue_skb(struct sock *sk, struct sk_buff *skb)
+ static void tcp_set_skb_tso_segs(const struct sock *sk, struct sk_buff *skb,
+                                 unsigned int mss_now)
+ {
++       /* Make sure we own this skb before messing gso_size/gso_segs */
++       WARN_ON_ONCE(skb_cloned(skb));
++
+        if (skb->len <= mss_now || !sk_can_gso(sk) ||
+            skb->ip_summed == CHECKSUM_NONE) {
+                /* Avoid the costly divide in the normal
+@@ -1067,9 +1070,7 @@ int tcp_fragment(struct sock *sk, struct sk_buff *skb, u32 len,
+        if (nsize < 0)
+                nsize = 0;
+
+-       if (skb_cloned(skb) &&
+-           skb_is_nonlinear(skb) &&
+-           pskb_expand_head(skb, 0, 0, GFP_ATOMIC))
++       if (skb_unclone(skb, GFP_ATOMIC))
+                return -ENOMEM;
+
+        /* Get a new skb... force flag on. */
+@@ -2344,6 +2345,8 @@ int __tcp_retransmit_skb(struct sock *sk, struct sk_buff *skb)
+                int oldpcount = tcp_skb_pcount(skb);
+
+                if (unlikely(oldpcount > 1)) {
++                       if (skb_unclone(skb, GFP_ATOMIC))
++                               return -ENOMEM;
+                        tcp_init_tso_segs(sk, skb, cur_mss);
+                        tcp_adjust_pcount(sk, skb, oldpcount - tcp_skb_pcount(skb));
+                }
+
+这个补丁在修改skb之前，都要调用一下skb_unclone来确保它不是clone的。
+
+那么这个warn就可能表示这个地方也是缺少修改，可能也需要添加，但是和开源最新的代码又不一致，需要仔细再分析一下：
+commit b5e2c45783aa785cbb195e43d5f0c0c6b228bde4
+Author: Eric Dumazet <edumazet@google.com>
+Date:   Thu Jun 11 09:15:19 2015 -0700
+
+    tcp: remove obsolete check in tcp_set_skb_tso_segs()
+
+    We had various issues in the past when TCP stack was modifying
+    gso_size/gso_segs while clones were in flight.
+
+    Commit c52e2421f73 ("tcp: must unclone packets before mangling them")
+    fixed these bugs and added a WARN_ON_ONCE(skb_cloned(skb)); in
+    tcp_set_skb_tso_segs()
+
+    These bugs are now fixed, and because TCP stack now only sets
+    shinfo->gso_size|segs on the clone itself, the check can be removed.
+
+    As a result of this change, compiler inlines tcp_set_skb_tso_segs() in
+    tcp_init_tso_segs()
+
+
