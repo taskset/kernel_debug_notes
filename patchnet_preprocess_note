@@ -1,0 +1,210 @@
+PatchNet预处理模块分析笔记
+
+一、函数式语言OCaml
+
+1，发展脉络：ml -》 Caml  -》 OCaml
+ML (meta language)是一个通用的函数式编程语言，它是由爱丁堡大学的Robin Milner等人在七十年代晚期开发的。作为元语言的ML是为了帮助在LCF定理证明机中寻找证明策略。
+
+Caml (originally an acronym for Categorical abstract machine language) is a multi-paradigm, general-purpose programming language which is a dialect of the ML programming language family. Caml was developed in France at INRIA and ENS.
+Like many descendants of ML, Caml is statically typed, strictly evaluated, and uses automatic memory management.
+
+OCaml, as of 2017 the main implementation of Caml, adds many features to the language, including an object layer.
+
+http://www.cs.cornell.edu/courses/cs3110/2014sp/lecture_notes.php
+CS 3110 Spring 2014 :: Data Structures and Functional Programming
+
+Using,Understanding, and Unraveling The OCaml Language
+http://caml.inria.fr/pub/docs/u3-ocaml/ocaml.pdf
+
+中文书籍很少，我们后继有空的时候，可以选择一些来翻译为中文。
+
+2，关键概念
+a，绑定: 绑定是不可变的，不是变量，不能被改写.(类似于宏？)
+比如：
+let name = expression in用来定义一个命名的局部绑定。以后name就可以用来代替expression，直到一个;;结束本代码块。
+let average a b =
+  let sum = a +. b in
+  sum /. 2.0;;
+  
+b，引用：通过引用可以修改变量的值
+比如：
+let my_ref = ref 0;;
+my_ref := 100
+:=操作符用来给引用赋值，!操作符用来取出引用的值。
+
+
+c，高阶函数：高阶函数是指一个把其他函数作为参数之一的函数。
+比如：
+# let double x = x * 2 in
+  List.map double [ 1; 2; 3 ];;
+- : int list = [2; 4; 6]
+
+这里List模块的map函数就是高阶函数。
+
+d，闭包：带着它们被定义时的环境的函数，一个闭包可以引用它定义时存在的变量。
+比如：
+# let multiply n list =
+    let f x =
+      n * x in
+    List.map f list;;
+	
+# multiply 2 [1; 2; 3];;
+- : int list = [2; 4; 6]
+
+e，著名的map-reduce
+比如：
+map f [a; b; c] 它等价于： [f a; f b; f c]
+fold_right f [a; b; c] r  从右边开始reduce，它等价于： f a (f b (f c r))
+fold_left f r [a; b; c] 从左边开始reduce，它等价于： f (f (f r a) b) c
+
+此外OCaml还具有面向对象的特性，我们分析的代码中暂时没有用到，暂不分析。
+
+二，代码语义分析工具coccinelle
+http://coccinelle.lip6.fr/
+（参考Introduction to Coccinelle （cocciwk4_talk1.pdf）)
+
+1、工具的背景
+A Foundation for Flow-Based Program Matching Using Temporal Logic and Model Checking
+http://cseweb.ucsd.edu/conferences/popl/09/
+以及
+https://pages.lip6.fr/Julia.Lawall/popl09-brunel.pdf
+
+关键是：Computational Tree Logic with extra features [POPL 2009]
+
+更早些的参考论文是2003年的一篇博士论文：
+D. Lacey. Program Transformation using Temporal Logic Specifications.
+PhD thesis, Oxford University Computing Laboratory, 2003
+
+主要是把CTL(计算树逻辑)用于描述程序的控制流程图
+这方面的知识我们国内也是空缺。
+
+2, 该工具的目的：
+Specify patterns of code to be found and transformed.
+Specify which terms should be abstracted over.
+C-like, patch-like notation.
+
+3，关键概念：
+a、Two parts per rule:
+Metavariable declaration:
+expression, statement, type, constant, local idexpression
+
+b、Transformation specification:
+- in the leftmost column for something to remove
++ in the leftmost column for something to add
+* in the leftmost column for something of interest，Cannot be used with + and -
+
+c、Depends on:
+Express that the applicability of one rule depends on the
+success or failure of another.
+
+d、Ellipses(“...”) 
+can be used to indicate to Coccinelle that anything can be present between consecutive statements. 
+
+e、举例：
+linux/scripts/coccinelle/ 随便选几个解析即可。
+
+三、预处理模块的使用
+1、输入：
+输入一个文件，文件内容为若干行commit_id: label
+
+2、输出：
+输出三个文件
+out_data.dict：所有补丁的单词组成的词表（我的理解是便于排查问题）
+out_data.tmp：输出的预处理临时文件，信息全面，把代码中的变量的词向量也打印出来了
+out_data.out：输出的最终文件，对于code，过滤掉了变量的词向量，只保留token的词向量。
+
+3、开发：
+目前的输入文件是手工构造的，工作量较大，考虑把它自动化，开发了一个脚本来做这件事情。
+开源社区还没有进一步的反馈。 
+
+4、示例：
+首先，运行我们开发的脚本，生成输入文件；
+然后，运行预处理程序，生成预处理结果文件；
+最后，把预处理结果文件输入到深度学习模块，训练出神经网络的模型。
+
+三、预处理模块的内部实现
+
+1，代码分析：
+
+getinfo.ml 预处理模块的主要入口、骨架流程
+a、参数解析,Arg.parse
+b、创建临时工作目录、文件
+
+c、调用patch.ml子模块，获取待处理的所有补丁的信息（Patch.get_commits）
+   格式为：
+   (commit,label,author_date,commit_date, committer_email,files)
+   
+d、遍历补丁列表，对每一个补丁都调用一次collect_diff.ml子模块，获取每一个补丁的代码差异信息（Collect_diff.getone）。
+   格式为：
+   (hnk,sign,sln,scol,eln,ecol,str)  （忽略了外面的commit等通用数据。）
+   str中包含了coccinell处理之后的语义信息（EHC/ECC/NORMAL）。
+   
+e、对每一个差异代码块，调用lexer_c.c子模块，分析语法树，把token和value由字符串转化为词表中的序号（Lexing.from_string、Lexer_c.token）
+   格式为：
+   (hnk,sign,sln,scol,eln,ecol,ty（ehc、ecc等语义标志）,词典中的序号,str)
+
+f、如果传入的--nolog为false，则还需要处理patch的msg信息。调用word.ml子模块的run_get_words函数，把词频大于1的单词转化为词表的序号，另外还调用nlp.py,获取词干、剔除停用词。
+
+g、输出，把预处理后的信息输出到指定的文件。
+
+2）补丁的语义分析：
+通过 parse_changes.cocci脚本来完成
+cmd spatch.opt --debug parse_changes.cocci --very-quiet --include-headers-for-types --no-loops --timeout 3600 -D data=/tmp/collect_diff -D tag=- -D commit=5eb173f5c8f3a3cdc47b3952c368f10a28c81ab8 -D thefile=/tmp/tmp/before_0.c /tmp/tmp/before_0.c
+cmd spatch.opt --debug parse_changes.cocci --very-quiet --include-headers-for-types --no-loops --timeout 3600 -D data=/tmp/collect_diff -D tag=+ -D commit=5eb173f5c8f3a3cdc47b3952c368f10a28c81ab8 -D thefile=/tmp/tmp/after_0.c /tmp/tmp/after_0.c
+
+对应的输入变量：
+@initialize:ocaml@
+commit << virtual.commit;
+data << virtual.data;
+tag << virtual.tag; // - or +
+thefile << virtual.thefile; // - or +
+@@
+
+怎么判断是EHC(error handle code):
+@ehc exists@
+statement rs.S;
+declaration rs.D;
+position rs.ps;
+expression e1 != 0;
+identifier l;
+@@
+
+(
+if (...) { ... \(S@ps\|D@ps\) ... \(goto l; \| return e1;\) }
+|
+if (...) { ... \(goto l;@S@ps \| return e1;@S@ps\) }
+|
+l: ... \(S@ps\|D@ps\) ... \(goto l;@S@ps \| return e1;@S@ps\)
+|
+l: ... \(goto l;@S@ps \| return e1;@S@ps\)
+)
+
+
+
+怎么判断是ECC（error check code）
+@ecc exists@
+position if_one_branch.pi;
+expression e;
+expression e1 != 0;
+identifier l;
+@@
+
+if (e@pi) { ... \(goto l; \| return e1;\) }
+
+
+四，改进
+1、补丁的msg部分，只对词频大于1的单词进行处理，有没有办法改进呢？
+2、补丁的code部分，只对语法树上的类型(token)进行处理，丢掉了变量值(value)，有没有办法改进呢？
+3、补丁的code部分，cocci脚本目前只检测了EHC、ECC和NORMAL，应该还可以更进一步深挖，细化出更有利于补丁分析的子类别。
+4、补丁的其他部分，只包含author_date、commit_date，其他信息都丢弃了，比如author_name/email等，而这些可能也是有价值的。
+
+五，深入研究
+ocaml语言熟练使用、ocaml语言的具体实现
+coccinell工具熟练使用、coccinell工具的具体实现
+
+
+
+
+
+
+
