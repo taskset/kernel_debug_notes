@@ -5,11 +5,12 @@ PatchNet预处理模块分析笔记
 1，发展脉络：ml -》 Caml  -》 OCaml
 ML (meta language)是一个通用的函数式编程语言，它是由爱丁堡大学的Robin Milner等人在七十年代晚期开发的。作为元语言的ML是为了帮助在LCF定理证明机中寻找证明策略。
 
-Caml (originally an acronym for Categorical abstract machine language) is a multi-paradigm, general-purpose programming language which is a dialect of the ML programming language family. Caml was developed in France at INRIA and ENS.
+Caml (originally an acronym for Categorical abstract machine language) is a multi-paradigm, general-purpose programming language which is a dialect of the ML programming language family. Caml was developed in France at INRIA (法国国家信息与自动化研究所) and ENS(巴黎高等师范学院).
 Like many descendants of ML, Caml is statically typed, strictly evaluated, and uses automatic memory management.
 
 OCaml, as of 2017 the main implementation of Caml, adds many features to the language, including an object layer.
 
+相关的资料：
 http://www.cs.cornell.edu/courses/cs3110/2014sp/lecture_notes.php
 CS 3110 Spring 2014 :: Data Structures and Functional Programming
 
@@ -22,16 +23,17 @@ http://caml.inria.fr/pub/docs/u3-ocaml/ocaml.pdf
 a，绑定: 绑定是不可变的，不是变量，不能被改写.(类似于宏？)
 比如：
 let name = expression in用来定义一个命名的局部绑定。以后name就可以用来代替expression，直到一个;;结束本代码块。
+（简单理解： 数学上证明的时候，“令 X 等于 XXXX”）
+
 let average a b =
   let sum = a +. b in
   sum /. 2.0;;
   
 b，引用：通过引用可以修改变量的值
 比如：
-let my_ref = ref 0;;
-my_ref := 100
+let XXXX_ref = ref 0;;
+XXX_ref := 100
 :=操作符用来给引用赋值，!操作符用来取出引用的值。
-
 
 c，高阶函数：高阶函数是指一个把其他函数作为参数之一的函数。
 比如：
@@ -48,16 +50,20 @@ d，闭包：带着它们被定义时的环境的函数，一个闭包可以引�
       n * x in
     List.map f list;;
 	
+f是一个闭包，它使用定义它的环境（multiply）中的变量n；
+然后再把闭包f传给List.map这个高阶函数。
+
 # multiply 2 [1; 2; 3];;
 - : int list = [2; 4; 6]
 
-e，著名的map-reduce
+e，大数据中著名的map-reduce
 比如：
 map f [a; b; c] 它等价于： [f a; f b; f c]
 fold_right f [a; b; c] r  从右边开始reduce，它等价于： f a (f b (f c r))
 fold_left f r [a; b; c] 从左边开始reduce，它等价于： f (f (f r a) b) c
 
 此外OCaml还具有面向对象的特性，我们分析的代码中暂时没有用到，暂不分析。
+函数式代码展现的是数学结构，而不是普通的数据结构+算法。
 
 二，代码语义分析工具coccinelle
 http://coccinelle.lip6.fr/
@@ -69,6 +75,8 @@ http://cseweb.ucsd.edu/conferences/popl/09/
 以及
 https://pages.lip6.fr/Julia.Lawall/popl09-brunel.pdf
 
+Principles of Programming Languages  程序设计语言原理
+
 关键是：Computational Tree Logic with extra features [POPL 2009]
 
 更早些的参考论文是2003年的一篇博士论文：
@@ -79,29 +87,33 @@ PhD thesis, Oxford University Computing Laboratory, 2003
 这方面的知识我们国内也是空缺。
 
 2, 该工具的目的：
-Specify patterns of code to be found and transformed.
-Specify which terms should be abstracted over.
-C-like, patch-like notation.
+Specify patterns of code to be found and transformed.  定义要查找、转换的模式
+Specify which terms should be abstracted over.   定义哪些术语会被抽象出来
+C-like, patch-like notation.      -》形式表现上，和C类似、和patch也类似（主要是+、-之类）
+
+感觉coccinelle工具除了具有函数式编程的特征（直接使用ocaml语言），还具有逻辑式编程的特征（比如定义规则），
+另外通过调用python脚本，还兼具了命令式编程的优点。
 
 3，关键概念：
 a、Two parts per rule:
-Metavariable declaration:
+第一部分：Metavariable declaration:
 expression, statement, type, constant, local idexpression
 
-b、Transformation specification:
+第二部分：Transformation specification:
 - in the leftmost column for something to remove
 + in the leftmost column for something to add
 * in the leftmost column for something of interest，Cannot be used with + and -
 
-c、Depends on:
+b、Depends on（rule之间的依赖关系）:
 Express that the applicability of one rule depends on the
 success or failure of another.
 
-d、Ellipses(“...”) 
+c、Ellipses(“...”)  标志任意的、暂时不关注的代码块
 can be used to indicate to Coccinelle that anything can be present between consecutive statements. 
 
-e、举例：
+举例：
 linux/scripts/coccinelle/ 随便选几个解析即可。
+基于coccinelle工具，已经提交了上百个内核补丁：http://coccinelle.lip6.fr/impact_linux.php
 
 三、预处理模块的使用
 1、输入：
@@ -117,6 +129,9 @@ out_data.out：输出的最终文件，对于code，过滤掉了变量的词向�
 目前的输入文件是手工构造的，工作量较大，考虑把它自动化，开发了一个脚本来做这件事情。
 开源社区还没有进一步的反馈。 
 
+generate_labelled_commits.sh  -b 2016-02-01 -e 2016-02-02 -d /media/B/tsp/git/linux -s /media/B/tsp/git/linux-stable  -r linux-2.6.32 -o xxx
+===》从2016-02-01到2016-02-02，在linux主线上的补丁，有哪些是合入了stable的linux-2.6.32分支上的。
+
 4、示例：
 首先，运行我们开发的脚本，生成输入文件；
 然后，运行预处理程序，生成预处理结果文件；
@@ -131,24 +146,231 @@ a、参数解析,Arg.parse
 b、创建临时工作目录、文件
 
 c、调用patch.ml子模块，获取待处理的所有补丁的信息（Patch.get_commits）
-   格式为：
-   (commit,label,author_date,commit_date, committer_email,files)
-   
+   输入为commitid，
+   处理的方式实质上是调用：git log -n 1 --pretty=format:"%H%n%an%n%ae%n%at%n%cn%n%ce%n%ct%n%s"  --numstat --diff-filter=M --no-merges COMMITID
+   比如：
+$ git log -n 1 --pretty=format:"%H%n%an%n%ae%n%at%n%cn%n%ce%n%ct%n%s"  --numstat --diff-filter=M --no-merges  be35b982e83a3f2c2cfbb27320066fb8a27168c2
+
+be35b982e83a3f2c2cfbb27320066fb8a27168c2
+Ivan Khoronzhuk
+ivan.khoronzhuk@linaro.org
+1533905228
+David S. Miller
+davem@davemloft.net
+1534005533
+net: ethernet: ti: cpsw: clear all entries when delete vid
+4       10      drivers/net/ethernet/ti/cpsw.c
+1       1       drivers/net/ethernet/ti/cpsw_ale.c
+
+   处理后的格式为：
+   (commit,label,author_email,author_date,committer_name,committer_email, commit_date,subject,from,files)
+比如：
+Breakpoint: 1
+155   <|b|>let infos =
+(ocd) p infos
+infos:
+  (string * string * string * string * string * string * string * string *
+   string option * string list)
+  list =
+  [("803c4f64d79d2fced37a0650b94e6c84296dffd6", "true",
+    "ivan.khoronzhuk@linaro.org", "1533905229", "David S. Miller",
+    "davem@davemloft.net", "1534005533",
+    "net: ethernet: ti: cpsw: fix runtime_pm while add/kill vlan", None,
+    ["drivers/net/ethernet/ti/cpsw.c"]);
+   ("be35b982e83a3f2c2cfbb27320066fb8a27168c2", "false",
+    "ivan.khoronzhuk@linaro.org", "1533905228", "David S. Miller",
+    "davem@davemloft.net", "1534005533",
+    "net: ethernet: ti: cpsw: clear all entries when delete vid", None,
+    ["drivers/net/ethernet/ti/cpsw_ale.c"; "drivers/net/ethernet/ti/cpsw.c"]);
+......
+
 d、遍历补丁列表，对每一个补丁都调用一次collect_diff.ml子模块，获取每一个补丁的代码差异信息（Collect_diff.getone）。
    格式为：
    (hnk,sign,sln,scol,eln,ecol,str)  （忽略了外面的commit等通用数据。）
-   str中包含了coccinell处理之后的语义信息（EHC/ECC/NORMAL）。
-   
+   str中还包含了coccinell处理之后的语义信息（EHC/ECC/NORMAL）。
+
+比如：
+201   Printf.eprintf "after word processing %d\n" (List.length infos)<|a|>;
+(ocd) p infos
+infos:
+  ((string * string * string * string * string * string list) *
+   ((string * (int * string * int * int * int * int * string) list) list *
+    string list))
+  list =
+  [(("5eb173f5c8f3a3cdc47b3952c368f10a28c81ab8", "true", "1533796608",
+     "1533829273", "wsa@the-dreams.de", ["drivers/i2c/busses/i2c-xlp9xx.c"]),
+    ([("drivers/i2c/busses/i2c-xlp9xx.c",
+       [(1, "+", 207, 2, 207, 8, "len -- ;");
+        (2, "+", 212, 3, 212, 32,
+         "__local__0__function__ ( struct__0__xlp9xx_i2c_dev__0____star__ ) ;");
+        (2, "+", 213, 3, 213, 10, "return ;");
+        (2, "-", 198, 2, 198, 8, "} else"); (2, "-", 198, 9, 198, 10, "{");
+        (2, "-", 199, 3, 199, 17,
+         "* u8__0____star__ ++ = __from__0__xlp9xx_read_i2c_reg ;");
+        (2, "-", 200, 3, 200, 24,
+         "if (struct__0__xlp9xx_i2c_dev__0____star__ -> client_pec)");
+        (2, "-", 201, 4, 201, 11, "++ __from__0__xlp9xx_read_i2c_reg ;");
+        (2, "-", 203, 3, 203, 34,
+         "struct__0__xlp9xx_i2c_dev__0____star__ -> msg_buf_remaining = __from__0__xlp9xx_read_i2c_reg ;");
+        (2, "-", 204, 3, 204, 28,
+         "struct__0__xlp9xx_i2c_dev__0____star__ -> msg_len = __from__0__xlp9xx_read_i2c_reg + 1 ;");
+        (3, "+", 216, 2, 216, 16,
+         "* u8__0____star__ ++ = __from__0__xlp9xx_read_i2c_reg ;");
+        (3, "+", 217, 2, 217, 23,
+         "if (struct__0__xlp9xx_i2c_dev__0____star__ -> client_pec)");
+        (3, "+", 218, 3, 218, 10, "++ __from__0__xlp9xx_read_i2c_reg ;");
+        (3, "+", 220, 2, 220, 33,
+         "struct__0__xlp9xx_i2c_dev__0____star__ -> msg_buf_remaining = __from__0__xlp9xx_read_i2c_reg ;");
+        (3, "+", 221, 2, 221, 27,
+         "struct__0__xlp9xx_i2c_dev__0____star__ -> msg_len = __from__0__xlp9xx_read_i2c_reg + 1 ;");
+        (4, "-", 208, 1, 208, 7, "} else"); (4, "-", 208, 8, 208, 9, "{");
+        (4, "-", 209, 2, 209, 42,
+         "__from__0__min = min ( struct__0__xlp9xx_i2c_dev__0____star__ -> msg_buf_remaining , __from__0__min ) ;");
+        (4, "-", 210, 2, 210, 34,
+         "for (i = 0;i < __from__0__min;i ++ , u8__0____star__ ++)");
+        (4, "-", 211, 3, 211, 56,
+         "* u8__0____star__ = __local__0__function__ ( struct__0__xlp9xx_i2c_dev__0____star__ , XLP9XX_I2C_MRXFIFO ) ;");
+        (4, "-", 213, 2, 213, 33,
+         "struct__0__xlp9xx_i2c_dev__0____star__ -> msg_buf_remaining -= __from__0__min ;");
+        (5, "+", 226, 1, 226, 41,
+         "__from__0__min = min ( struct__0__xlp9xx_i2c_dev__0____star__ -> msg_buf_remaining , __from__0__min ) ;");
+        (5, "+", 227, 1, 227, 33,
+         "for (i = 0;i < __from__0__min;i ++ , u8__0____star__ ++)");
+        (5, "+", 228, 2, 228, 55,
+         "* u8__0____star__ = __local__0__function__ ( struct__0__xlp9xx_i2c_dev__0____star__ , XLP9XX_"... (* string length 108; truncated *));
+        (5, "+", 230, 1, 230, 32,
+         "struct__0__xlp9xx_i2c_dev__0____star__ -> msg_buf_remaining -= __from__0__min ;")])],
+     ["XLP9XX_I2C_MRXFIFO"; "i"; "for"; "min"; "__from__0__min"; "msg_len";
+      "msg_buf_remaining"; "client_pec"; "if";
+      "__from__0__xlp9xx_read_i2c_reg"; "u8__0____star__"; "else"; "return";
+      "struct__0__xlp9xx_i2c_dev__0____star__"; "__local__0__function__";
+      "len"]));
+   (("24eee1e4c47977bdfb71d6f15f6011e7b6188d04", "false", "1533946986",
+     "1533957598", "torvalds@linux-foundation.org", ["mm/memory.c"]),
+    ([("mm/memory.c",
+       [(1, "+", 4398, 1, 4398, 12, "ECC: if (! __from__0__ioremap_prot)");
+        (1, "+", 4399, 2, 4399, 17, "EHC: return - ENOMEM ;")])],
+     ["ENOMEM"; "EHC"; "__from__0__ioremap_prot"; "ECC"]));
+   (("4f7a7beaee77275671654f7b9f3f9e"... (* string length 40; truncated *),
+     "true", "1533946990", "1533957599",
+     "torvalds@linux-foundation."... (* string length 29; truncated *),
+     ["drivers/block/zram/zram_"... (* string length 29; truncated *)]),
+    ([("drivers/block/zram/z"... (* string length 29; truncated *),
+       [(1, "+", 301, 1, 302, 27,
+         "struct__0__"... (* string length 109; truncated *));
+        (2, "+", 414, 1, 415, 27,
+         "__f"... (* string length 105; truncated *))])],
+     ["_"... (* string length 22; truncated *);
+      ""... (* string length 22; truncated *); ...]));
+   ...]
+(ocd)
+
 e、对每一个差异代码块，调用lexer_c.c子模块，分析语法树，把token和value由字符串转化为词表中的序号（Lexing.from_string、Lexer_c.token）
    格式为：
    (hnk,sign,sln,scol,eln,ecol,ty（ehc、ecc等语义标志）,词典中的序号,str)
 
+236   <|b|>let infos =
+(ocd) p infos
+infos:
+  ((string * string * string * string * string * string list) *
+   (string *
+    (int * string * int * int * int * int * string * string list * string)
+    list)
+   list)
+  list =
+  [(("5eb173f5c8f3a3cdc47b3952c368f10a28c81ab8", "true", "1533796608",
+     "1533829273", "wsa@the-dreams.de", ["drivers/i2c/busses/i2c-xlp9xx.c"]),
+    [("drivers/i2c/busses/i2c-xlp9xx.c",
+      [(1, "+", 207, 2, 207, 8, "Normal",
+        ["x72x11x115"; "x86x18x18"; "x95x95x95"], "len -- ;");
+       (2, "+", 212, 3, 212, 32, "Normal",
+        ["x72x11x114"; "x81x81x81"; "x72x11x113"; "x82x82x82"; "x95x95x95"],
+        "__local__0__function__ ( struct__0__xlp9xx_i2c_dev__0____star__ ) ;");
+       (2, "+", 213, 3, 213, 10, "Normal", ["x48x11x112"; "x95x95x95"],
+        "return ;");
+       (2, "-", 198, 2, 198, 8, "Normal", ["x84x84x84"; "x48x11x111"],
+        "} else");
+       (2, "-", 198, 9, 198, 10, "Normal", ["x83x83x83"], "{");
+       (2, "-", 199, 3, 199, 17, "Normal",
+        ["x85x13x13"; "x72x11x110"; "x86x17x17"; "x87x19x19"; "x72x11x109";
+         "x95x95x95"],
+        "* u8__0____star__ ++ = __from__0__xlp9xx_read_i2c_reg ;");
+       (2, "-", 200, 3, 200, 24, "Normal",
+        ["x48x11x108"; "x81x81x81"; "x72x11x113"; "x92x92x92"; "x72x11x107";
+         "x82x82x82"],
+        "if (struct__0__xlp9xx_i2c_dev__0____star__ -> client_pec)");
+       (2, "-", 201, 4, 201, 11, "Normal",
+        ["x86x17x17"; "x72x11x109"; "x95x95x95"],
+        "++ __from__0__xlp9xx_read_i2c_reg ;");
+       (2, "-", 203, 3, 203, 34, "Normal",
+        ["x72x11x113"; "x92x92x92"; "x72x11x106"; "x87x19x19"; "x72x11x109";
+         "x95x95x95"],
+        "struct__0__xlp9xx_i2c_dev__0____star__ -> msg_buf_remaining = __from__0__xlp9xx_read_i2c_reg ;");
+       (2, "-", 204, 3, 204, 28, "Normal",
+        ["x72x11x113"; "x92x92x92"; "x72x11x105"; "x87x19x19"; "x72x11x109";
+         "x85x12x12"; "x75x75x75"; "x95x95x95"],
+        "struct__0__xlp9xx_i2c_dev__0____star__ -> msg_len = __from__0__xlp9xx_read_i2c_reg + 1 ;");
+       (3, "+", 216, 2, 216, 16, "Normal",
+        ["x85x13x13"; "x72x11x110"; "x86x17x17"; "x87x19x19"; "x72x11x109";
+         "x95x95x95"],
+        "* u8__0____star__ ++ = __from__0__xlp9xx_read_i2c_reg ;");
+       (3, "+", 217, 2, 217, 23, "Normal",
+        ["x48x11x108"; "x81x81x81"; "x72x11x113"; "x92x92x92"; "x72x11x107";
+         "x82x82x82"],
+        "if (struct__0__xlp9xx_i2c_dev__0____star__ -> client_pec)");
+       (3, "+", 218, 3, 218, 10, "Normal",
+        ["x86x17x17"; "x72x11x109"; "x95x95x95"],
+        "++ __from__0__xlp9xx_read_i2c_reg ;");
+       (3, "+", 220, 2, 220, 33, "Normal",
+        ["x72x11x113"; "x92x92x92"; "x72x11x106"; "x87x19x19"; "x72x11x109";
+         "x95x95x95"],
+        "struct__0__xlp9xx_i2c_dev__0____star__ -> msg_buf_remaining = __from__0__xlp9xx_rea"... (* string length 94; truncated *));
+       (3, "+", 221, 2, 221, 27, "Normal",
+        ["x72x11x113"; "x92x92x92"; "x72x11x105"; "x87x19x19"; "x72x11x109";
+         "x85x12x12"; "x75x75x75"; "x95x95x95"],
+        "struct__0__xlp9xx_i2c_dev__0____star__ -> msg_len = __from__0__xl"... (* string length 88; truncated *));
+       (4, "-", 208, 1, 208, 7, "Normal", ["x84x84x84"; "x48x11x111"],
+        "} else");
+       (4, "-", 208, 8, 208, 9, "Normal", ["x83x83x83"], "{");
+       (4, "-", 209, 2, 209, 42, "Normal",
+        ["x72x11x104"; "x87x19x19"; "x72x11x103"; "x81x81x81"; "x72x11x113";
+         "x92x92x92"; "x72x11x106"; "x94x94x94"; "x72x11x104"; "x82x82x82";
+         "x95x95x95"],
+        "__from__0__min = min "... (* string length 103; truncated *));
+       (4, "-", 210, 2, 210, 34, "Normal",
+        ["x48x11x102"; "x81x81x81";
+         "x72x11x10"... (* string length 10; truncated *);
+         "x87x19x1"... (* string length 9; truncated *);
+         "x75x75x"... (* string length 9; truncated *);
+         "x95x95"... (* string length 9; truncated *);
+         "x72x1"... (* string length 10; truncated *);
+         "x88x"... (* string length 9; truncated *);
+         "x72"... (* string length 10; truncated *);
+         "x9"... (* string length 9; truncated *);
+         "x"... (* string length 10; truncated *);
+         ""... (* string length 9; truncated *); ...],
+        ...);
+       ...]);
+     ...]);
+   ...]
+
+
 f、如果传入的--nolog为false，则还需要处理patch的msg信息。调用word.ml子模块的run_get_words函数，把词频大于1的单词转化为词表的序号，另外还调用nlp.py,获取词干、剔除停用词。
 
+Breakpoint: 4
+254   <|b|>let tmp = !output_prefix^".tmp" in
+(ocd) p logtbl
+logtbl: (string, int list * int list * string list) Hashtbl.t option =
+  Some <abstr>
+
+hashtable在调试器中print不出来，不利于分析问题，可能是ocaml的调试器的一个小的改进点。
+  
 g、输出，把预处理后的信息输出到指定的文件。
 
 2）补丁的语义分析：
-通过 parse_changes.cocci脚本来完成
+通过 parse_changes.cocci脚本来完成，目的是标记代码差异块是EHC（error handle code），还是ECC（error check code），或者是NORMAL。
+一般来说EHC、ECC的代码块，都是故障修复的，更有可能合入stable分支。
+
 cmd spatch.opt --debug parse_changes.cocci --very-quiet --include-headers-for-types --no-loops --timeout 3600 -D data=/tmp/collect_diff -D tag=- -D commit=5eb173f5c8f3a3cdc47b3952c368f10a28c81ab8 -D thefile=/tmp/tmp/before_0.c /tmp/tmp/before_0.c
 cmd spatch.opt --debug parse_changes.cocci --very-quiet --include-headers-for-types --no-loops --timeout 3600 -D data=/tmp/collect_diff -D tag=+ -D commit=5eb173f5c8f3a3cdc47b3952c368f10a28c81ab8 -D thefile=/tmp/tmp/after_0.c /tmp/tmp/after_0.c
 
@@ -160,7 +382,12 @@ tag << virtual.tag; // - or +
 thefile << virtual.thefile; // - or +
 @@
 
-怎么判断是EHC(error handle code):
+怎么判断是EHC（error handler code）:
+按照经验，内核代码的一般模式是：
+在if分支中，goto到某个label；
+在label中进行进一步的释放资源等操作，并且还可能跳转到另外的label；
+而且返回值不为0.
+
 @ehc exists@
 statement rs.S;
 declaration rs.D;
@@ -180,8 +407,10 @@ l: ... \(goto l;@S@ps \| return e1;@S@ps\)
 )
 
 
+怎么判断是ECC（error check code，检测是否出错）：
+按照经验，内核的一般模式是：
+在if分支中进行错误检测，可能会直接返回错误码（非0值）； 或者goto出去。
 
-怎么判断是ECC（error check code）
 @ecc exists@
 position if_one_branch.pi;
 expression e;
@@ -191,12 +420,11 @@ identifier l;
 
 if (e@pi) { ... \(goto l; \| return e1;\) }
 
-
 四，改进
-1、补丁的msg部分，只对词频大于1的单词进行处理，有没有办法改进呢？
-2、补丁的code部分，只对语法树上的类型(token)进行处理，丢掉了变量值(value)，有没有办法改进呢？
-3、补丁的code部分，cocci脚本目前只检测了EHC、ECC和NORMAL，应该还可以更进一步深挖，细化出更有利于补丁分析的子类别。
-4、补丁的其他部分，只包含author_date、commit_date，其他信息都丢弃了，比如author_name/email等，而这些可能也是有价值的。
+1、对补丁的msg部分的预处理，只挑选出了词频大于1的单词，是否足够呢？
+2、对补丁的code部分的预处理，只对语法树上的类型(token)进行处理，丢掉了变量值(value)，有没有办法改进呢？
+3、对补丁的code部分的预处理，cocci脚本目前只检测了EHC、ECC和NORMAL，应该还可以更进一步深挖，细化出更有利于补丁分析的子类别。
+4、对补丁的其他部分，只挑选出了author_date、commit_date，其他信息都丢弃了，比如author_name/email等，而这些可能也是有价值的。
 
 五，深入研究
 ocaml语言熟练使用、ocaml语言的具体实现
