@@ -1,0 +1,32 @@
+工作中有时需要把外部开源项目的代码同步到公司内网的git仓库中，最简单的方法是把外部开源项目打包下载下来，解压、直接上传到内网的git仓库中。
+这个只能保证代码是最新的，但是丢失了提交日志和修改记录，不利于后期的问题排查。
+
+经过试验，发现有方法可以把开源代码的完整git修改记录都同步到内网git仓库。
+把它记录如下：
+
+1， 把开源项目下载到本地的一个目录，比如：/media/B/tsp/git/ctuning/ck
+
+2， 进入本地的git目录，把刚下载的目录添加进来，给它起一个名字叫other（或者其他任意名字） 
+$ git remote add other  /media/B/tsp/git/ctuning/ck
+
+3，  把other的信息fetch下来：
+$ git fetch other
+
+4， checkout 一个分支，分支名字叫做upstream（或者任意其他的）
+$ git checkout -b upstream  other/master
+
+5， checkout 到 master
+$ git checkout master
+
+6， 把 upstream 合并到master
+$ git merge upstream
+
+7，（可选）检查一下本地引用的两个仓库（一个引用到内网的git仓库，一个引用到下载到本地的外部开源项目）：
+$ git remote -v
+origin  ssh://xxxx@yyyy:29418/zzzz/AI/ck (fetch)   ---》指向内网的git仓库
+origin  ssh://xxxx@yyyy:29418/zzzz/AI/ck (push)
+other   /media/B/tsp/git/ctuning/ck (fetch)        ---》指向下载到本地的外部开源项目   
+other   /media/B/tsp/git/ctuning/ck (push)
+
+8， 最后一步，把合并之后的代码提交到内网git仓库上去
+$ git push origin
