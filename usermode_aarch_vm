@@ -1,0 +1,47 @@
+1， 编译支持aarch64的qemu
+git clone https://github.com/qemu/qemu.git
+git checkout origin/stable-3.1  -b stable-3.1
+./configure --target-list=aarch64-softmmu && make -j 30
+make install
+
+2， 准备操作系统镜像（以centos做实验）和efi镜像
+$wget  http://cloud.centos.org/altarch/7/images/aarch64/CentOS-7-aarch64-GenericCloud-1606.qcow2.xz
+$wget http://releases.linaro.org/components/kernel/uefi-linaro/16.02/release/qemu64/QEMU_EFI.fd
+
+3， 配置登陆的用户（假设是mockbuild用户）
+$mkdir cloudinitiso
+$cd cloudinitiso
+
+$cat user-data
+#cloud-config
+user: mockbuild
+password: atomic
+chpasswd: {expire: False}
+ssh_pwauth: True
+sudo: ['ALL=(ALL) NOPASSWD:ALL']
+groups: mock
+shell: /bin/bash
+$cat meta-data
+instance-id: Atomic0
+local-hostname: atomic-00
+
+根据上述两个文件制作image：
+$genisoimage -output atomic0cidata.iso -volid cidata -joliet -rock user-data meta-data
+
+4,  根据操作系统镜像、efi镜像和配置信息镜像，编写启动脚本：
+#!/bin/bash
+qemu-system-aarch64 \
+-smp 8 \
+-m 10G \
+-M virt \
+-cpu cortex-a57 \
+-bios QEMU_EFI.fd \
+-nographic \
+-device virtio-blk-device,drive=image \
+-drive if=none,id=image,file=CentOS-7-aarch64-GenericCloud-1606.qcow2 \
+-device virtio-blk-device,drive=cloud \
+-drive if=none,id=cloud,file=./cloudinitiso/atomic0cidata.iso \
+-netdev user,id=user0,hostfwd=tcp::10022-:22 \
+-device virtio-net-device,netdev=user0
+
+启动之后即可登陆；也可以新开一个窗口，通过ssh登陆：ssh -p  10022  mockbuild@127.0.0.1
