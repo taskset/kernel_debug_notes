@@ -1,0 +1,442 @@
+最近我们需要对一批网卡重命名（即把ethXXX 改名为 ethYYY），遇到了一系列问题，比较有意思，特记录如下。
+
+一，问题描述
+剥离具体的业务场景，我们用虚拟机来举例。
+假设我们有如下5块网卡：
+  <interface type='bridge'>
+      <mac address='52:54:00:b5:49:5d'/>
+      <source bridge='virbr0'/>
+      <model type='virtio'/>
+      <address type='pci' domain='0x0000' bus='0x02' slot='0x01' function='0x0'/>
+   </interface>
+   <interface type='bridge'>
+      <mac address='52:5a:00:b5:49:5e'/>
+      <source bridge='virbr0'/>
+      <model type='virtio'/>
+      <address type='pci' domain='0x0000' bus='0x04' slot='0x01' function='0x0'/>
+    </interface>
+   <interface type='bridge'>
+      <mac address='52:5b:00:b5:49:5e'/>
+      <source bridge='virbr0'/>
+      <model type='virtio'/>
+      <address type='pci' domain='0x0000' bus='0x04' slot='0x01' function='0x1'/>
+    </interface>
+   <interface type='bridge'>
+      <mac address='52:5c:01:b5:49:5e'/>
+      <source bridge='virbr0'/>
+      <model type='virtio'/>
+      <address type='pci' domain='0x0000' bus='0x08' slot='0x01' function='0x0'/>
+    </interface>
+   <interface type='bridge'>
+      <mac address='52:5e:02:b5:49:5e'/>
+      <source bridge='virbr0'/>
+      <model type='virtio'/>
+      <address type='pci' domain='0x0000' bus='0x08' slot='0x02' function='0x0'/>
+    </interface>
+
+
+原始名: PCI总线号: MAC地址
+eth0:  02:01.0  52:54:00:b5:49:5d
+eth1:  04:01.0  52:5a:00:b5:49:5e
+eth2:  04:01.1  52:5b:00:b5:49:5e
+eth3:  08:01.0  52:5c:01:b5:49:5e
+eth4:  08:02.0  52:5e:02:b5:49:5e
+
+我们期待网卡按照如下的规则重新命名：
+eth1  -> eth0
+eth2  -> eth1
+eth0  -> eth4
+eth3  -> eth5 
+eth4  -> eth6
+
+按照通常的思路，添加如下的udev规则：
+# cat /etc/udev/rules.d/70-persistent.rules
+SUBSYSTEM=="net", ACTION=="add", ATTR{address}=="52:5a:00:b5:49:5e", NAME="eth0"
+SUBSYSTEM=="net", ACTION=="add", ATTR{address}=="52:5b:00:b5:49:5e", NAME="eth1"
+SUBSYSTEM=="net", ACTION=="add", ATTR{address}=="52:54:00:b5:49:5d", NAME="eth4"
+SUBSYSTEM=="net", ACTION=="add", ATTR{address}=="52:5c:01:b5:49:5e", NAME="eth5"
+SUBSYSTEM=="net", ACTION=="add", ATTR{address}=="52:5e:02:b5:49:5e", NAME="eth6"
+
+但是这个规则会报错：
+# systemctl -l status systemd-udevd
+● systemd-udevd.service - udev Kernel Device Manager
+   Loaded: loaded (/usr/lib/systemd/system/systemd-udevd.service; static; vendor preset: disabled)
+   Active: active (running) since Fri 2020-03-06 12:07:18 CST; 24s ago
+     Docs: man:systemd-udevd.service(8)
+           man:udev(7)
+ Main PID: 775 (systemd-udevd)
+   Status: "Processing with 24 children at max"
+    Tasks: 1
+   Memory: 13.3M
+   CGroup: /system.slice/systemd-udevd.service
+           └─775 /usr/lib/systemd/systemd-udevd
+
+Mar 06 12:07:18 iZuf6h1kfgutxc3el68z2lZ systemd-udevd[775]: Network interface NamePolicy= disabled on kernel command line, ignoring.
+Mar 06 12:07:18 iZuf6h1kfgutxc3el68z2lZ systemd[1]: Started udev Kernel Device Manager.
+Mar 06 12:07:18 iZuf6h1kfgutxc3el68z2lZ systemd-udevd[778]: Error changing net interface name 'eth0' to 'eth4': File exists
+Mar 06 12:07:18 iZuf6h1kfgutxc3el68z2lZ systemd-udevd[778]: could not rename interface '2' from 'eth0' to 'eth4': File exists
+Mar 06 12:07:18 iZuf6h1kfgutxc3el68z2lZ systemd-udevd[782]: Error changing net interface name 'eth2' to 'eth1': File exists
+Mar 06 12:07:18 iZuf6h1kfgutxc3el68z2lZ systemd-udevd[782]: could not rename interface '4' from 'eth2' to 'eth1': File exists
+Mar 06 12:07:18 iZuf6h1kfgutxc3el68z2lZ systemd-udevd[781]: Error changing net interface name 'eth1' to 'eth0': File exists
+Mar 06 12:07:18 iZuf6h1kfgutxc3el68z2lZ systemd-udevd[781]: could not rename interface '3' from 'eth1' to 'eth0': File exists
+
+
+上述从一批ethAAA -》 ethCCC 的直接改名，会导致rename冲突 （比如我们 a <-> b 的交换是通过新增一个临时变量c来实现的）。
+
+如何解决上述的问题呢？
+
+二， 问题分析
+
+我们参考了这篇文章：《redhat 万兆和千兆的网卡命名问题》
+https://www.jianshu.com/p/d501b8875295
+解法是设置cmdline参数： biosdevname=0 net.ifnames=1
+但是不彻底，有一些原理性和细节性的问题需要理一下。
+
+1， 疑问： Naming Schemes Hierarchy 和   规则的优先级 之间的关系会不会有冲突？
+
+Naming Schemes Hierarchy：
+https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/7/html/networking_guide/ch-Consistent_Network_Device_Naming#sec-Naming_Schemes_Hierarchy
+方案 1：如果固件或 BIOS 信息适用且可用，则使用整合了为板载设备提供索引号的固件或 BIOS 的名称（例如：eno1），否则请使用方案 2。
+方案 2：如果固件或 BIOS 信息适用且可用，则使用整合了为 PCI 快速热插拔插槽提供索引号的固件或 BIOS 名称（例如 ens1），否则请使用方案 3。
+方案 3：如果硬件连接器物理位置信息可用，则使用整合了该信息的名称（例如：enp2s0），否则请使用方案 5。
+方案 4：默认不使用整合接口 MAC 地址的名称（例如：enx78e7d1ea46da），但用户可选择使用此方案。
+方案 5：传统的不可预测的内核命名方案，在其他方法均失败后使用（例如： eth0）
+
+规则的优先级：
+https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/7/html/networking_guide/sec-understanding_the_device_renaming_procedure
+/usr/lib/udev/rules.d/60-net.rules
+/usr/lib/udev/rules.d/71-biosdevname.rules
+/lib/udev/rules.d/75-net-description.rules
+/usr/lib/udev/rules.d/80-net-name-slot.rules
+
+规则的执行顺序是60-》71-》75-》80 这样执行下来的，其中60-net.rules规则就有可能会把网卡 命名为“不可预测的内核命名方案-ethxxx”了：
+/usr/lib/udev/rules.d/60-net.rules instructs the udev helper utility, /lib/udev/rename_device, 
+to look into all /etc/sysconfig/network-scripts/ifcfg-suffix files. 
+If it finds an ifcfg file with a HWADDR entry matching the MAC address of an interface it renames
+the interface to the name given in the ifcfg file by the DEVICE directive.
+
+比如我们如果在/etc/sysconfig/network-scripts/ifcfgXXX 中的DEVICE= 配置了网卡名为ethxxx，那么它的会先执行，就打破了 Naming Schemes Hierarchy。
+
+
+2， 经过我们做实验, 在（iosdevname=0 net.ifnames=1）参数下，发现网卡会经过两次命名：
+
+a，由ethAAA -》 enpBBB
+b，由enpBBB -》 ethCCC
+
+ethAAA -》 enpBBB 的重命名是在小系统中做的，
+加载的规则很有限（有80-net-name-slot.rules 而没有60-net.rules），
+这个特殊的技巧解答了我们刚才的疑惑。
+日志如下：
+systemd-udevd[322]: timestamp of '/etc/udev/rules.d' changed
+systemd-udevd[322]: Reading rules file: /usr/lib/udev/rules.d/40-redhat.rules
+systemd-udevd[322]: Reading rules file: /usr/lib/udev/rules.d/50-udev-default.ru
+systemd-udevd[322]: Reading rules file: /etc/udev/rules.d/59-persistent-storage.
+systemd-udevd[322]: Reading rules file: /usr/lib/udev/rules.d/60-block.rules
+systemd-udevd[322]: Reading rules file: /usr/lib/udev/rules.d/60-persistent-stor
+systemd-udevd[322]: Reading rules file: /etc/udev/rules.d/61-persistent-storage.
+systemd-udevd[322]: Reading rules file: /usr/lib/udev/rules.d/70-uaccess.rules
+systemd-udevd[322]: Reading rules file: /usr/lib/udev/rules.d/71-biosdevname.rul
+systemd-udevd[322]: Reading rules file: /usr/lib/udev/rules.d/71-seat.rules
+systemd-udevd[322]: Reading rules file: /usr/lib/udev/rules.d/73-seat-late.rules
+systemd-udevd[322]: Reading rules file: /usr/lib/udev/rules.d/75-net-description
+systemd-udevd[322]: Reading rules file: /usr/lib/udev/rules.d/76-phys-port-name.
+systemd-udevd[322]: Reading rules file: /usr/lib/udev/rules.d/80-drivers.rules
+systemd-udevd[322]: Reading rules file: /usr/lib/udev/rules.d/80-net-name-slot.r
+systemd-udevd[322]: Reading rules file: /usr/lib/udev/rules.d/80-net-setup-link.
+systemd-udevd[322]: Reading rules file: /usr/lib/udev/rules.d/90-vconsole.rules
+systemd-udevd[322]: Reading rules file: /usr/lib/udev/rules.d/95-udev-late.rules
+systemd-udevd[322]: Reading rules file: /usr/lib/udev/rules.d/99-systemd.rules
+systemd-udevd[322]: rules contain 24576 bytes tokens (2048 * 12 bytes), 6845 byt
+systemd-udevd[322]: 1023 strings (11980 bytes), 637 de-duplicated (5522 bytes),
+systemd-udevd[322]: set children_max to 20
+...
+systemd[1]: systemd-udev-trigger.service changed dead -> start
+systemd[1]: Starting udev Coldplug all Devices...
+systemd[323]: Executing: /usr/bin/udevadm trigger --type=subsystems --action=add
+systemd[1]: Got notification message for unit systemd-journald.service
+systemd[1]: Got notification message from PID 224 (FDSTORE=1)
+systemd[1]: systemd-journald.service: got FDSTORE=1
+systemd[1]: systemd-journald.service: added fd to fd store.
+systemd-udevd[322]: seq 1008 queued, 'add' 'bus'
+systemd-udevd[322]: seq 1008 forked new worker [324]
+systemd-udevd[322]: seq 1009 queued, 'add' 'drivers'
+systemd-udevd[322]: seq 1010 queued, 'add' 'drivers'
+systemd-udevd[324]: seq 1008 running
+systemd-udevd[322]: seq 1011 queued, 'add' 'drivers'
+...
+Mar 07 23:41:05 iZuf6h1kfgutxc3el68z2lZ systemd-udevd[325]: NAME 'enp2s1' /usr/ll
+ib/udev/rules.d/80-net-name-slot.rules:12
+
+
+由enpBBB -》 ethCCC 的重命名是在切换到大系统之后，再次trigger事件之后执行的。
+此时60-net.rules 和 80-net-name-slot.rules都加载了，60-net.rules的优先级更高，所有又把网卡再次改名。
+改名过程的日志如下：
+# journalctl  -b | grep "renamed"
+Mar 07 07:52:42 iZuf6h1kfgutxc3el68z2lZ kernel: virtio_net virtio1 enp2s1: renamed from eth0
+Mar 07 07:52:42 iZuf6h1kfgutxc3el68z2lZ kernel: virtio_net virtio2 enp4s1f0: renamed from eth1
+Mar 07 07:52:43 iZuf6h1kfgutxc3el68z2lZ kernel: virtio_net virtio4 enp8s1: renamed from eth3
+Mar 07 07:52:43 iZuf6h1kfgutxc3el68z2lZ kernel: virtio_net virtio3 enp4s1f1: renamed from eth2
+Mar 07 07:52:43 iZuf6h1kfgutxc3el68z2lZ kernel: virtio_net virtio5 enp8s2: renamed from eth4
+Mar 07 07:52:42 iZuf6h1kfgutxc3el68z2lZ systemd-udevd[325]: renamed network interface 'eth0' to 'enp2s1'
+Mar 07 07:52:43 iZuf6h1kfgutxc3el68z2lZ systemd-udevd[324]: renamed network interface 'eth1' to 'enp4s1f0'
+Mar 07 07:52:43 iZuf6h1kfgutxc3el68z2lZ systemd-udevd[330]: renamed network interface 'eth3' to 'enp8s1'
+Mar 07 07:52:43 iZuf6h1kfgutxc3el68z2lZ systemd-udevd[329]: renamed network interface 'eth2' to 'enp4s1f1'
+Mar 07 07:52:43 iZuf6h1kfgutxc3el68z2lZ systemd-udevd[331]: renamed network interface 'eth4' to 'enp8s2'
+Mar 06 23:52:45 iZuf6h1kfgutxc3el68z2lZ kernel: virtio_net virtio1 eth4: renamed from enp2s1
+Mar 06 23:52:45 iZuf6h1kfgutxc3el68z2lZ kernel: virtio_net virtio3 eth0: renamed from enp4s1f1
+Mar 06 23:52:45 iZuf6h1kfgutxc3el68z2lZ kernel: virtio_net virtio2 eth1: renamed from enp4s1f0
+Mar 06 23:52:45 iZuf6h1kfgutxc3el68z2lZ kernel: virtio_net virtio5 eth6: renamed from enp8s2
+Mar 06 23:52:45 iZuf6h1kfgutxc3el68z2lZ kernel: virtio_net virtio4 eth5: renamed from enp8s1
+Mar 06 23:52:45 iZuf6h1kfgutxc3el68z2lZ systemd-networkd[786]: enp2s1          : renamed to eth4
+Mar 06 23:52:45 iZuf6h1kfgutxc3el68z2lZ systemd-networkd[786]: enp4s1f1        : renamed to eth0
+Mar 06 23:52:45 iZuf6h1kfgutxc3el68z2lZ systemd-networkd[786]: enp4s1f0        : renamed to eth1
+Mar 06 23:52:45 iZuf6h1kfgutxc3el68z2lZ systemd-networkd[786]: enp8s2          : renamed to eth6
+Mar 06 23:52:45 iZuf6h1kfgutxc3el68z2lZ systemd-networkd[786]: enp8s1          : renamed to eth
+
+
+所以说， biosdevname=0 net.ifnames=1参数，相当于在系统启动的过程执行了这些网卡改名动作：
+ethAAA -》 enpBBB -》ethCCC
+
+在ethAAA 和 ethCCC 之间通过enpBBB来过渡了一下，避免了“File exists”错误。
+
+但在系统启动之后， 如果我们在遇到网卡卸载/加载操作，上述方法就不行了，因为没有了中间名称来避免名称冲突。
+
+三， 问题的解决方法
+
+1， 出问题之后的修复方法
+按照上述原理，我们需要避免执行从ethAAA 到 ethCCC 的直接改名，就可以修复问题。
+
+a， 规避方法1 （通过新增一个中间规则）
+# cat /etc/udev/rules.d/69-tmp.rules.bak ( 更改后缀名，让它先不要生效)
+SUBSYSTEM=="net", ACTION=="add",ATTR{address}=="52:5a:00:b5:49:5e",NAME="eth100"
+SUBSYSTEM=="net", ACTION=="add",ATTR{address}=="52:5b:00:b5:49:5e",NAME="eth101"
+SUBSYSTEM=="net", ACTION=="add",ATTR{address}=="52:54:00:b5:49:5d",NAME="eth104"
+SUBSYSTEM=="net", ACTION=="add",ATTR{address}=="52:5c:01:b5:49:5e",NAME="eth105"
+SUBSYSTEM=="net", ACTION=="add",ATTR{address}=="52:5e:02:b5:49:5e",NAME="eth106"
+
+# cat fix_udev_rules.sh
+mv /etc/udev/rules.d/70-persistent.rules  /etc/udev/rules.d/70-persistent.rules.bak
+mv /usr/lib/udev/rules.d/60-net.rules /usr/lib/udev/rules.d/60-net.rules.bak
+
+#加一个临时规则，是把网卡命名为不会冲突的名字（比如一个很大的eth号）
+mv /etc/udev/rules.d/69-tmp.rules.bak  /etc/udev/rules.d/69-tmp.rules
+
+#刷新规则，触发udev，临时规则生效
+udevadm control --reload
+udevadm trigger --action=add --subsystem-match=net
+
+sleep 2
+#恢复正式规则
+mv /etc/udev/rules.d/70-persistent.rules.bak /etc/udev/rules.d/70-persistent.rules
+mv /usr/lib/udev/rules.d/60-net.rules.bak  /usr/lib/udev/rules.d/60-net.rules
+#取消临时规则
+mv /etc/udev/rules.d/69-tmp.rules  /etc/udev/rules.d/69-tmp.rules.bak
+
+#加载规则，触发udev，把临时规则中的网卡名，改为正式的
+udevadm control --reload
+udevadm trigger --action=add --subsystem-match=net
+
+b，规避方法2 （不新增规则，利用现有的80规则）
+mv /usr/lib/udev/rules.d/60-net.rules   /usr/lib/udev/rules.d/60-net.rules.bak
+mv /etc/udev/rules.d/70-persistent-net.rules  /etc/udev/rules.d/70-persistent-net.rules.bak
+
+udevadm control --reload
+udevadm trigger --action=add --subsystem-match=net
+
+
+mv /etc/udev/rules.d/70-persistent-net.rules.bak /etc/udev/rules.d/70-persistent-net.rules
+mv /usr/lib/udev/rules.d/60-net.rules.bak   /usr/lib/udev/rules.d/60-net.rules
+udevadm control --reload
+udevadm trigger --action=add --subsystem-match=net
+
+2， 避免出问题的方法
+
+新增一个外部程序，在程序中实现retry-rename-wait的逻辑，绕过网卡名字冲突的时间窗。
+
+# cat rename_eth.c
+#include <stdlib.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <string.h>
+#include <stdarg.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <time.h>
+#include <net/if.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+
+
+ssize_t print_kmsg(const char *fmt, ...)
+{
+	int fd;
+	va_list ap;
+	char text[1024];
+	ssize_t len;
+	ssize_t ret;
+
+	fd = open("/dev/kmsg", O_WRONLY|O_NOCTTY|O_CLOEXEC);
+	if (fd < 0)
+		return -errno;
+
+	len = snprintf(text, sizeof(text), "<30>alibaba-rename-eth[%u]: ", getpid());
+
+	va_start(ap, fmt);
+	len += vsnprintf(text + len, sizeof(text) - len, fmt, ap);
+	va_end(ap);
+
+	ret = write(fd, text, len);
+	if (ret < 0)
+		ret = -errno;
+	close(fd);
+	return ret;
+}
+
+size_t strpcpy(char **dest, size_t size, const char *src) {
+	size_t len;
+
+	len = strlen(src);
+	if (len >= size) {
+		if (size > 1)
+			*dest = mempcpy(*dest, src, size-1);
+		size = 0;
+	} else {
+		if (len > 0) {
+			*dest = mempcpy(*dest, src, len);
+			size -= len;
+		}
+	}
+	*dest[0] = '\0';
+	return size;
+}
+
+size_t strscpy(char *dest, size_t size, const char *src) {
+	char *s;
+
+	s = dest;
+	return strpcpy(&s, size, src);
+}
+
+int rename_eth(char *name, char *new_name)
+{
+	struct ifreq ifr;
+	int loop;
+	int err;
+	int sk;
+
+	print_kmsg("changing net interface name from '%s' to '%s'\n", name, new_name);
+	sk = socket(PF_INET, SOCK_DGRAM, 0);
+	if (sk < 0) {
+		err = -errno;
+		print_kmsg("error opening socket: %c\n", err);
+		return err;
+	}
+
+	memset(&ifr, 0x00, sizeof(struct ifreq));
+	strscpy(ifr.ifr_name, IFNAMSIZ, name);
+	strscpy(ifr.ifr_newname, IFNAMSIZ, new_name);
+	err = ioctl(sk, SIOCSIFNAME, &ifr);
+	if (err == 0) {
+		print_kmsg("renamed network interface %s to %s\n", ifr.ifr_name, ifr.ifr_newname);
+		goto out;
+	}
+
+	/* keep trying if the destination interface name already exists */
+	err = -errno;
+	if (err != -EEXIST)
+		goto out;
+
+	/* free our own name, another process may wait for us */
+	snprintf(ifr.ifr_newname, IFNAMSIZ, "rename_%s", name);
+	err = ioctl(sk, SIOCSIFNAME, &ifr);
+	if (err < 0) {
+		err = -errno;
+		goto out;
+	}
+
+	/* log temporary name */
+	print_kmsg("renamed network interface %s to %s\n", ifr.ifr_name, ifr.ifr_newname);
+
+	/* wait a maximum of 90 seconds for our target to become available */
+	strscpy(ifr.ifr_name, IFNAMSIZ, ifr.ifr_newname);
+	strscpy(ifr.ifr_newname, IFNAMSIZ, new_name);
+	loop = 90 * 20;
+	while (loop--) {
+		const struct timespec duration = { 0, 1000 * 1000 * 1000 / 20 };
+
+		nanosleep(&duration, NULL);
+
+		err = ioctl(sk, SIOCSIFNAME, &ifr);
+		if (err == 0) {
+			print_kmsg("renamed network interface %s to %s\n", ifr.ifr_name, ifr.ifr_newname);
+			break;
+		}
+		err = -errno;
+		if (err != -EEXIST)
+			break;
+	}
+
+out:
+	if (err < 0)
+		print_kmsg("error changing net interface name %s to %s: %m\n", ifr.ifr_name, ifr.ifr_newname);
+	close(sk);
+	return err;
+}
+
+int main(int argc, char **argv) {
+	char *new_name = NULL;
+	char *name;
+	int o;
+
+	while ((o = getopt (argc, argv, "c:")) != -1) {
+		switch (o) {
+			case 'c':
+				new_name = optarg;
+				break;
+			default:
+				printf("Usage: -r new_name\n");
+				return -EINVAL;
+		}
+	}
+
+	if(!new_name)
+		return -EINVAL;
+
+	name = getenv("INTERFACE");
+	if (!name) {
+		print_kmsg("INTERFACE not exists\n");
+		goto out;
+	}
+
+	rename_eth(name, new_name);
+
+out:
+	exit(0);
+}
+
+# cat /etc/udev/rules.d/59-test.rules
+SUBSYSTEM=="net", ACTION=="add", ATTR{address}=="52:5a:00:b5:49:5e", RUN+="rename_eth -c eth0"
+SUBSYSTEM=="net", ACTION=="add", ATTR{address}=="52:5b:00:b5:49:5e", RUN+="rename_eth -c eth1"
+SUBSYSTEM=="net", ACTION=="add", ATTR{address}=="52:54:00:b5:49:5d", RUN+="rename_eth -c eth4"
+SUBSYSTEM=="net", ACTION=="add", ATTR{address}=="52:5c:01:b5:49:5e", RUN+="rename_eth -c eth5"
+SUBSYSTEM=="net", ACTION=="add", ATTR{address}=="52:5e:02:b5:49:5e", RUN+="rename_eth -c eth6"
+
+这样我们通过新增一个自定义的程序也可以解决这个问题。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
