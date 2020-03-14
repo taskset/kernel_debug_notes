@@ -1,0 +1,143 @@
+1， 最近遇到一个问题，对某Flash设备进行mkfs，随机性报错：
+
+$sudo mkfs.ext4  /dev/dfb1
+mke2fs 1.43.5 (04-Aug-2017)
+Discarding device blocks: done
+Creating filesystem with 390624512 4k blocks and 97656832 inodes
+Filesystem UUID: ea9736e8-b992-48d8-a34a-c74d3f1d1bdb
+Superblock backups stored on blocks:
+	32768, 98304, 163840, 229376, 294912, 819200, 884736, 1605632, 2654208,
+	4096000, 7962624, 11239424, 20480000, 23887872, 71663616, 78675968,
+	102400000, 214990848
+
+Allocating group tables: done
+Writing inode tables: done
+Creating journal (262144 blocks): mkfs.ext4: File exists
+	while trying to create journal
+  
+  
+  用社区最新的e2fsprogs还是有这个错误。
+  
+  2，分析
+ A，第一步查找问题的规律
+ 经过多次实验，规律如下：
+对干净的分区没有问题，但是一旦对分区写入过文件，就会有问题。
+所以可以复现如下（假设dfb1是flash， /xxx/disk1/chudou/mnt/ 是我们的测试目录）：
+$sudo mount /dev/dfb1  /xxx/disk1/chudou/mnt/
+$sudo touch /apsarapangu /xxx/chudou/mnt/1
+$sudo umount /xxx/disk1/chudou/mnt/
+$sync
+
+$sudo mkfs.ext4  /dev/dfb1
+... 必出故障。
+
+B， 分析代码
+以前没有看过e2fsprogs，现在着手分析，花了一些时间。
+发现e2fsprogs 有一些特点：
+
+*  代码中使用了cache，好像还没有ivalid机制，这样如果第一次读取了错误的值，cache中会一直保留这个值。
+
+首先怀疑是它的问题。
+diff --git a/misc/mke2fs.c b/misc/mke2fs.c
+index c90dcf0e..1904009d 100644
+--- a/misc/mke2fs.c
++++ b/misc/mke2fs.c
+@@ -2925,6 +2925,7 @@ int main (int argc, char *argv[])
+        char            *hash_alg_str;
+        int             itable_zeroed = 0;
+        blk64_t         overhead;
++       struct ext2_inode       test_node;
+
+ #ifdef ENABLE_NLS
+        setlocale(LC_MESSAGES, "");
+@@ -3200,14 +3201,19 @@ int main (int argc, char *argv[])
+                test_disk(fs, &bb_list);
+        handle_bad_blocks(fs, bb_list);
+
++
+        fs->stride = fs_stride = fs->super->s_raid_stride;
+        if (!quiet)
+                printf("%s", _("Allocating group tables: "));
+        if (ext2fs_has_feature_flex_bg(fs->super) &&
+            packed_meta_blocks)
+                retval = packed_allocate_tables(fs);
+-       else
++       else {
+                retval = ext2fs_allocate_tables(fs);
++               test_node.i_blocks = 0;
++               ext2fs_read_inode(fs, 8, &test_node);
++               printf("%s:%d, i_block:%d\n", __func__, __LINE__, test_node.i_blocks);
++       }
+        if (retval) {
+                com_err(program_name, retval, "%s",
+                        _("while trying to allocate filesystem tables"));
+
+添加patch打印，确实在ext2fs_allocate_tables 之后，journal 的i_block就变了。
+然后一直怀疑ext2fs_allocate_tables 有bug，这个地方花费了很多时间，修改了无数地方，都没没有解决问题。
+
+* 后面换一个思路，继续看代码，发现e2fsprogs还有不少性能优化的技巧。
+
+比如 对支持DISCARD的设备添加了CHANNEL_FLAGS_DISCARD_ZEROES 标志：
+commit d866599ab4955858b1541f0891b1b165ba66493a
+Author: Lukas Czerner <lczerner@redhat.com>
+Date:   Thu Nov 18 03:38:37 2010 +0000
+
+    e2fsprogs: Add CHANNEL_FLAGS_DISCARD_ZEROES flag for io_manager
+
+    When the device have discard support and simultaneously discard zeroes
+    data (and it is properly advertised), then we can take advantage of such
+    behavior in several e2fsprogs tools.
+
+    Add new flag CHANNEL_FLAGS_DISCARD_ZEROES for struct_io_channel so
+    each io_manager can take advantage of this. The flag is properly set
+    according to BLKDISCARDZEROES ioctl in unix_open.
+
+    Also remove old mke2fs_discard_zeroes_data() function and substitute it
+    with helper which test this flag.
+
+    Signed-off-by: Lukas Czerner <lczerner@redhat.com>
+    Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+    
+当设备已经DISCARD——ZEROED时，就不用再zero一次，以提升性能：
+commit 5effd0a02283922dd53102ff409a4382fa1dfed7
+Author: Darrick J. Wong <darrick.wong@oracle.com>
+Date:   Sat Dec 13 22:01:15 2014 -0500
+
+    mke2fs: don't zero inode table blocks that are already zeroed
+
+    At mke2fs time, if we discard the device and discard zeroes data,
+    don't bother zeroing the inode table blocks a second time.
+
+    Signed-off-by: Darrick J. Wong <darrick.wong@oracle.com>
+    Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+
+沿着这个思路，果然发现如果取消这个优化，强制zero一次flash，问题消失了，mkfs成功了。
+简单理一下：
+e2fsprog 会利用ioctl BLKDISCARDZEROES 来探测设备是否具有DISCARD_ZERO的能力，如果有的话则设置flag：
+                int zeroes = 0;
+                if (ioctl(data->dev, BLKDISCARDZEROES, &zeroes) == 0 &&
+                    zeroes) 
+                        io->flags |= CHANNEL_FLAGS_DISCARD_ZEROES;
+该Flash返回了支持，所以这里设置上了CHANNEL_FLAGS_DISCARD_ZEROES。
+
+e2fsprog在mkfs的时候，检测到这个标志已经设置，则不会再去对磁盘数据清零，以提高效率。
+但是数据实际上是没有清零的，所以后面执行会报错。
+我在e2fsprog中强制添加清零的逻辑，可以规避，可以mkfs成功。
+
+那么问题的根因在于这一款Flash的硬件/驱动上：
+对BLKDISCARDZEROES ioctl可能支持得不好。
+
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+  
+  
+  
+  
+  
+  
+  
