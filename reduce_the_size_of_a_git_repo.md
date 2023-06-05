@@ -104,6 +104,9 @@ Date:   Wed Sep 15 09:50:49 2021 +0200
 然后直接下载对应的压缩包即可：
 wget https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/snapshot/linux-c31c2cca229aa5280d108618bb264c713840a4c2.tar.gz
 
+或者在本地repo中根据commit 制作 压缩包：
+git archive  c31c2cca229aa5280d108618bb264c713840a4c2 --format=tar.gz --output=./linux-c31c2cca229aa5280d108618bb264c713840a4c2.tar.gz
+
 这个虽然完全省略了.git 文件夹的消耗，但如上所说，丢失了修改记录，无法做源码朔源，也难以做小版本升降级，所以不到万不得已，还是不要这么用。
 
 ```
